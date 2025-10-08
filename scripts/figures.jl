@@ -1,5 +1,10 @@
-using CairoMakie, CSV, AlgebraOfGraphics
+using FasciolaDK
+using Rasters, DataFrames, CSV, Statistics
+using GLMakie, AlgebraOfGraphics
 import GeometryOps as GO, GeoInterface as GI, GADM, GeometryBasics
+
+### Some basic functions and data used in multiple figures
+dk_munic = GADM.get("DNK"; depth = 2) |> DataFrame
 
 koder_slfund = CSV.read(joinpath(datadir, "Koder_slagtefund.csv"), DataFrame)
 koder_slfund = NamedTuple(Symbol(r.SLFUNDKODE) => r.SLFUNDTEKST for r in eachrow(koder_slfund))
@@ -70,3 +75,59 @@ rowsize!(fig.layout, 2, Relative(0.6))
 fig
 
 save("images/figure1.png", fig)
+
+###### Climate data over time and space
+climatenormals, climateanomalies = get_terraclimate([:tavg, :aet, :ppt])
+yearly_anomalies = maplayers(climateanomalies) do l
+    map(mean ∘ skipmissing, eachslice(l, dims = (:season, :year)))
+end
+anomalies_in_space = dropdims(mean(climatenormals; dims = :season); dims = :season)
+anomalies_in_space.ppt .*= 12
+
+fig2 = let season_names = [            
+        1 => "Winter", 
+        2 => "Spring", 
+        3 => "Summer", 
+        4 => "Autumn"
+    ],
+    units = (tavg = "°C", ppt = "mm"),
+    names = (tavg = "Temperature", ppt = "Precipitation")
+
+    # AoG specification
+    spec = data(yearly_anomalies) * mapping(
+        :year => "",
+        [:tavg, :ppt] .=> ["Anomaly (°C)", "Anomaly (mm)"],
+        col = AlgebraOfGraphics.dims(1) => renamer(collect(names)),
+        linestyle = :season => renamer(season_names)
+    ) * visual(Lines)
+
+    figuregrid = draw(
+        spec, 
+        axis = (limits = (2010, 2023, nothing, nothing), xticks = 2010:2:2024, xminorgridvisible = true),
+        figure = (title ="Seasonal weather anomalies", titlealign = :center, size = (800, 800), fontsize = 10)
+    )
+
+    fig = figuregrid.figure
+
+    colorbarlabels = (
+        tavg = "Annual average temperature (°C)", 
+        ppt = "Annual total precipitation (mm)"
+    )
+
+    for (i, var, cmap) in zip(1:2, [:tavg, :ppt], [:magma, :blues])
+        ax = Axis(fig[2,i])
+        hidedecorations!(ax); hidespines!(ax)
+        pl = FasciolaDK.plot_denmark!(ax, anomalies_in_space[var]; colormap = cmap)
+        Colorbar(fig[3,i], pl; 
+            label = colorbarlabels[var], 
+            labelfont = :bold,
+            vertical = false
+        )
+    end
+
+    fig
+end;
+save("images/figure2.png", fig2)
+
+
+

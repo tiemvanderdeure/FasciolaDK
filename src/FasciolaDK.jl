@@ -13,5 +13,6 @@ include("registry.jl")
 include("climate.jl")
 include("utils.jl")
 include("vsup.jl")
+include("plots.jl")
 
 end # module FasciolaDK

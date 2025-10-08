@@ -18,5 +18,22 @@ function get_terraclimate(vars = (:aet, :tmax, :tmin, :ppt), destdir = "data/ter
         RasterStack(destdir)
     end
     tavg = middle.(climate.tmax, climate.tmin)
-    return RasterStack((; tavg, climate...))
+    return process_terraclimate(RasterStack((; tavg, climate...)[vars]))
+end
+
+function process_terraclimate(climateraw)
+    # rebuild to have a dimension with quarter/season
+    climate = maplayers(climateraw[Ti = Date(2009, 12) .. Date(2023, 11)]) do l
+        rebuild(
+            l; 
+            data = reshape(l, size(l)[1:2]..., 3, 4, :), 
+            dims = map(Rasters.format, (dims(l, (X,Y))..., Dim{:month}(1:3), Dim{:season}(1:4), Dim{:year}(2010:2024)))
+        )
+    end
+    # quarterly climate
+    climate_q = dropdims(mean(climate; dims = :month); dims = :month)
+    # normals for each pixels
+    climate_normals = dropdims(mean(climate_q; dims = :year); dims = :year)
+    climate_anomaly = broadcast_dims(-, climate_q, climate_normals)
+    return climate_normals, climate_anomaly
 end

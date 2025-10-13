@@ -2,6 +2,7 @@ using FasciolaDK
 using Rasters, DataFrames, CSV, Statistics
 using GLMakie, AlgebraOfGraphics
 import GeometryOps as GO, GeoInterface as GI, GADM, GeometryBasics
+import Rasters: dims
 
 ### Some basic functions and data used in multiple figures
 dk_munic = GADM.get("DNK"; depth = 2) |> DataFrame
@@ -130,4 +131,51 @@ end;
 save("images/figure2.png", fig2)
 
 
+##### Posterior estimatse
+import StatsFuns: logistic
+logistic(::Missing) = missing # tiny bit of type piracy to make this work
+posterior_mean = Raster(joinpath("/home/tvd/K", "posterior_space_time.nc"))
 
+rs = RasterSeries(joinpath("/home/tvd/K", "posterior_spatiotemporal.tif"), Dim{:iter}(Int)) |> Rasters.combine
+rs = set(rs, Rasters.Band => Ti(2010:2023)) # fix a dimension
+vals = logistic.(rs) |> skipmissing |> collect
+
+posterior_mean = dropdims(mean(rs; dims = :iter); dims = :iter)
+expected_incidence = logistic.(posterior_mean)
+
+mean_over_time = dropdims(mean(expected_incidence; dims = Ti); dims = Ti)
+
+fig3 = let fig = Figure(size = (800, 900)),
+    nrows = 4,
+    colorrange = (0, 0.4),
+    colormap = :plasma
+
+    for (i, t) in enumerate(dims(expected_incidence, Ti))
+        # get row and col index from nrows and i
+        row = div(i-1, nrows) + 1
+        col = mod1(i, nrows)
+        ax = Axis(fig[row, col], title = string(t))
+        hidedecorations!(ax); hidespines!(ax)
+        pl = FasciolaDK.plot_denmark!(ax, expected_incidence[Ti = At(t)]; colormap, colorrange)
+    end
+
+    ax = Axis(fig[div(14, nrows)+1, mod1(15, nrows)], title = "Average")
+    hidedecorations!(ax); hidespines!(ax)
+    FasciolaDK.plot_denmark!(ax, mean_over_time; colormap, colorrange)
+
+    Colorbar(fig[div(15, nrows)+1, mod1(16, nrows)]; 
+        label = "Posterior mean", 
+        labelfont = :bold,
+        vertical = false,
+        colormap, colorrange,
+        tellheight = false, tellwidth = false,
+        width = Relative(0.8)
+    )
+    rowgap!(fig.layout, 5)
+    rowgap!(fig.layout, 3, -15) # hack because colrobar overreports height
+    colgap!(fig.layout, 5)
+
+    fig
+end
+
+save("images/figure3.png", fig3)

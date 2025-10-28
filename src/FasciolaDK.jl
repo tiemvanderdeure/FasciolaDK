@@ -11,7 +11,6 @@ export vsup_colormatrix, val_u_to_color, vsup_legend
 
 include("registry.jl")
 include("climate.jl")
-include("utils.jl")
 include("vsup.jl")
 include("plots.jl")
 

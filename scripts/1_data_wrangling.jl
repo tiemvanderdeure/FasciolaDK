@@ -102,7 +102,7 @@ filter!(x -> !iszero(x.BES_ID), animals_sel)
 
 # Filter out animals that have been sent to a different herd during the relevant time
 dyr_udstationeret = Set(udstationeringer.DYR_ID)
-filter!(r -> !in(r.DYR_ID, dyr_udstationeret), animals_w_data)
+filter!(r -> !in(r.DYR_ID, dyr_udstationeret), animals_sel)
 
 # join on data about slagtedato, 
 animals_w_data = innerjoin(animals_sel, dyr_slagt_nodairyraces, on = :DYR_ID)
@@ -133,8 +133,8 @@ cohorts = combine(cohorts_grps,
 bes_included = unique(cohorts.BES_ID)
 
 ## Combine with climate data
-climatenormals, climateanomalies = get_terraclimate([:tavg, :aet, :ppt])
-climateobs = broadcast_dims(+, climatenormals, climateanomalies)
+climateobs = get_terraclimate()
+climateobs = climateobs[Not((:tmax, :tmin))]
 
 bes_lat_lon = DimVector(tuple.(beskoord.LON, beskoord.LAT), Dim{:BES_ID}(beskoord.BES_ID))
 bes_lat_lon_included = bes_lat_lon[BES_ID = At(bes_included)]
@@ -142,24 +142,37 @@ besclimate = similar(climateobs, (dims(bes_lat_lon_included)..., dims(climateobs
 for bes_id in bes_included 
     (x, y) = bes_lat_lon_included[BES_ID = At(bes_id)]
     dst = @view(besclimate[BES_ID = At(bes_id)])
-    src = climateanomalies[X = Near(x), Y = Near(y)]
+    src = climateobs[X = Near(x), Y = Near(y)]
     maplayers(copyto!, dst, src)
 end
 
-besclimate_array = mapreduce(merge, layers(besclimate)) do x
+besclimate_seasonal = mapreduce(merge, layers(besclimate)) do x
     RasterStack(x; layersfrom = :season, name = string(name(x)) .* "_" .* ["winter", "spring", "summer", "autumn"])
 end
 
 idx_no_climatedata = findall(x -> any(ismissing, x), eachslice(first(layers(besclimate)); dims = :BES_ID))
-bes_no_climatedata = lookup(dims(besclimate_array, :BES_ID))[idx_no_climatedata]
+bes_no_climatedata = lookup(dims(besclimate_seasonal, :BES_ID))[idx_no_climatedata]
 cohorts_w_climatedata = filter(cohorts) do r
     !(r.BES_ID in bes_no_climatedata)
 end
 
 # put everything into a single DF
 predictorsdf = map(eachrow(cohorts_w_climatedata)) do r
-   merge(besclimate_array[year = At(r.yr), BES_ID = At(r.BES_ID)], r)
+   merge(besclimate_seasonal[year = At(r.yr), BES_ID = At(r.BES_ID)], r)
 end |> DataFrame 
+
+# Normalize all the data columns in predictorsdf
+climatevars = keys(besclimate_seasonal)
+# get means and stds, save those and then Normalize
+function normalize!(x)
+    m = mean(x)
+    s = std(x)
+    x .= (x .- m) ./ s
+    return (m,s)
+end
+means_stds = map(keys(besclimate_seasonal)) do var
+    m,s = normalize!(predictorsdf[!, Symbol(var)])
+end |> NamedTuple{keys(besclimate_seasonal)}
 
 ## In-text numbers
 topct(x) = string(round(x * 100, digits=2)) * "%"

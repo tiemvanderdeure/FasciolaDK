@@ -1,8 +1,8 @@
 
 Statistics.middle(::Missing, x) = missing
 
-function get_terraclimate(vars = (:aet, :tmax, :tmin, :ppt), destdir = "data/terraclimate_dk.nc"; force = false)
-    climate = if force || !isfile(destdir)
+function get_terraclimate(vars = (:aet, :tmax, :tmin, :ppt, :def, :soil), destdir = "data/terraclimate_dk.nc"; force = false)
+    if force || !isfile(destdir)
         println("Downloading TerraClimate data")
         urls = NamedTuple(var => "http://thredds.northwestknowledge.net:8080/thredds/dodsC/agg_terraclimate_$(var)_1958_CurrentYear_GLOBE.nc" for var in vars)
 
@@ -14,11 +14,10 @@ function get_terraclimate(vars = (:aet, :tmax, :tmin, :ppt), destdir = "data/ter
         terraclimate = crop(lazyrs; to = dk, touches = true)[Ti = Where(>=(Date(2000)))] |> read
         terraclimate_dk = mask(terraclimate; with = dk, boundary = :touches)
         write(destdir, terraclimate_dk, deflatelevel = 2; missingval = Inf, force)
-    else
-        RasterStack(destdir)
     end
+    climate = RasterStack(destdir)
     tavg = middle.(climate.tmax, climate.tmin)
-    return process_terraclimate(RasterStack((; tavg, climate...)[vars]))
+    return process_terraclimate(RasterStack((; tavg, climate...)))
 end
 
 function process_terraclimate(climateraw)
@@ -31,9 +30,5 @@ function process_terraclimate(climateraw)
         )
     end
     # quarterly climate
-    climate_q = dropdims(mean(climate; dims = :month); dims = :month)
-    # normals for each pixels
-    climate_normals = dropdims(mean(climate_q; dims = :year); dims = :year)
-    climate_anomaly = broadcast_dims(-, climate_q, climate_normals)
-    return climate_normals, climate_anomaly
+    return dropdims(mean(climate; dims = :month); dims = :month)
 end

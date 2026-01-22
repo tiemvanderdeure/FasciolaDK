@@ -3,6 +3,8 @@ import DataFrames: combine # to disambiguate from Rasters.combine
 import Rasters: dims
 years = 2010:2023
 
+# FasciolaDK.download_terraclimate((:pet, :tmin, :tmax, :ppt, :def, :soil), "data/terraclimate_dk.nc"; silent = false)
+
 #=
 climate = get_terraclimate()
 
@@ -44,6 +46,7 @@ dyr_slagt_sel = dyr_slagt[
 # Filter out animals with race_id 1201, 1202, and 1203 as these are milk cattle
 dyr_slagt_nodairyraces = dyr_slagt_sel[dyr_slagt_sel.RACE_ID .> 1203, :]
 
+sort(collect(countmap(dyr_slagt_sel.RACE_ID)), by = last, rev = true)
 
 #select!(dyr_slagt_fund, Not(:SLAGTDATA_ID, :FOEDSELSDATO))
 
@@ -132,22 +135,25 @@ cohorts = combine(cohorts_grps,
 )
 bes_included = unique(cohorts.BES_ID)
 
-## Combine with climate data
-climateobs = get_terraclimate()
-climateobs = climateobs[Not((:tmax, :tmin))]
+## Read in climate data
+climateobs = get_terraclimate((:tavg, :ppt, :def, :soil))
+ollerenshaw = FD.get_ollerenshaw()
+climate = merge(climateobs, (; ollerenshaw))
 
+# Combine climate and 
 bes_lat_lon = DimVector(tuple.(beskoord.LON, beskoord.LAT), Dim{:BES_ID}(beskoord.BES_ID))
 bes_lat_lon_included = bes_lat_lon[BES_ID = At(bes_included)]
-besclimate = similar(climateobs, (dims(bes_lat_lon_included)..., dims(climateobs, (:season, :year))...))
-for bes_id in bes_included 
-    (x, y) = bes_lat_lon_included[BES_ID = At(bes_id)]
-    dst = @view(besclimate[BES_ID = At(bes_id)])
-    src = climateobs[X = Near(x), Y = Near(y)]
-    maplayers(copyto!, dst, src)
-end
+besclimate = map(bes_lat_lon_included) do (x,y)
+    src = climate[X = Near(x), Y = Near(y)]
+end |> RasterSeries |> Rasters.combine
 
 besclimate_seasonal = mapreduce(merge, layers(besclimate)) do x
-    RasterStack(x; layersfrom = :season, name = string(name(x)) .* "_" .* ["winter", "spring", "summer", "autumn"])
+    if hasdim(x, :season)
+        RasterStack(x; layersfrom = :season, 
+            name = string(Rasters.name(x)) .* "_" .* ["winter", "spring", "summer", "autumn"])
+    else
+        RasterStack(x)
+    end
 end
 
 idx_no_climatedata = findall(x -> any(ismissing, x), eachslice(first(layers(besclimate)); dims = :BES_ID))

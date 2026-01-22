@@ -66,7 +66,7 @@ random_vars <- c(
 
 vars <- c("tavg", "ppt", "soil", "def")
 seasons <- c("winter", "spring", "summer", "autumn")
-env_vars <- as.vector(outer(vars, seasons, function(x,y) paste(x,y,sep="_")))
+env_vars <- c(as.vector(outer(vars, seasons, function(x,y) paste(x,y,sep="_"))), "ollerenshaw", "1")
 
 # spacetime - multiple options
 vars_spacetime <- c(
@@ -96,9 +96,9 @@ model_list <- merge(model_list, env_vars)
 model_list$formula <- apply(model_list, 1, function(row) {
   terms <- c()
     # Add binary variables if included
-  for (var in names(vars)) {
+  for (var in names(random_vars)) {
     if (row[[var]]) {
-      terms <- c(terms, vars[[var]])
+      terms <- c(terms, random_vars[[var]])
     }
   }
   # Add the selected spacetime term
@@ -116,7 +116,7 @@ model_list$dic <- sapply(model_results, function(x) x$dic$dic)
 model_list$dic_sat <- sapply(model_results, function(x) x$dic$dic.sat)
 
 write.csv(
-  head(model_list[,-which(names(model_list) == "formula")]), 
+  model_list[,-which(names(model_list) == "formula")], 
   paste0("model_runs_", Sys.Date(), ".csv"), row.names = FALSE
 )
 
@@ -164,6 +164,12 @@ write.csv(
   model_results_full, 
   paste0("model_runs_posteriors", Sys.Date(), ".csv"), row.names = FALSE, na = ""
 )
+
+###
+formula <- y ~ øko + f(besid, model = "iid") + f(slagteri_id, model = "iid") + 
+    f(space, model = spde) + soil_spring + tavg_summer - 1 + Intercept
+
+res <- runinla(formula)
 
 
 #############
@@ -215,6 +221,20 @@ for (i in 1:nsamples){
   writeRaster(rast_template, paste0("/home/tvd/K/posterior_spatiotemporal", i, ".tif"), overwrite = TRUE)
 }
 
+####### Effect of year
+year_formula <- update(spacetime_formula, y ~ . + year)
+res_year <- runinla(year_formula)
+
+# Export posteriors
+posterior_fixed <- apply(res_year$summary.fixed, 1, function(x) c(x["mean"], x["0.025quant"], x["0.975quant"]))
+rownames(posterior_fixed) <- c("mean", "quant0.025", "quant0.975")
+posterior_fixed_v <- mat_to_vect(posterior_fixed)
+
+# i.i.d. posteriors
+besid_var <- parse_precision(res, "besid")
+slagtid_var <- parse_precision(res, "slagteri_id")
+vars <- c(posterior_fixed_v, besid_var, slagtid_var)
+write.csv(data.frame(vars), paste0("posteriors_year", Sys.Date(), ".csv"))
 
 ###### Playground
 # No clear effect of year

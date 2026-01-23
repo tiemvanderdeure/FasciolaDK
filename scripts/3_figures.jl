@@ -1,6 +1,6 @@
 using FasciolaDK
 using Rasters, DataFrames, CSV, Statistics
-using GLMakie, AlgebraOfGraphics
+using CairoMakie, AlgebraOfGraphics
 import GeometryOps as GO, GeoInterface as GI, GADM, GeometryBasics
 import Rasters: dims
 
@@ -92,7 +92,7 @@ fig1 = let years = 2010:2023
     fig
 end;
 
-save("images/figure1.png", fig1)
+save("images/figure1.png", fig1; pt_per_unit = 10)
 
 ###### Climate data over time and space
 climate = get_terraclimate((:tavg, :ppt))
@@ -154,7 +154,7 @@ fig2 = let season_names = [
 
     fig
 end;
-save("images/figure2.png", fig2)
+save("images/figure2.png", fig2; pt_per_unit = 10)
 
 
 ##### Posterior estimatse
@@ -204,7 +204,7 @@ fig3 = let fig = Figure(size = (800, 900)),
     fig
 end
 
-save("images/figure3.png", fig3)
+save("images/figure3.png", fig3; pt_per_unit = 10)
 
 #### Tables with posteriors of INLA models
 using SummaryTables, DataFrames, Printf, StatsBase

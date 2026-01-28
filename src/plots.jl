@@ -79,9 +79,15 @@ function vsup_legend(gp, vsup_cmap; kw...)
     )
     # Draw the legend - the meshimage trick is needed because surface plot is bugged
     # See https://github.com/MakieOrg/Makie.jl/issues/5235
+    # And disaggregation is needed with cairomakie...
+    vsup_rot = rotl90(vsup_cmap)
+    intscale = (20, 20)
+    indices = map((a, i) -> repeat(a; inner =i), axes(vsup_rot), intscale)
+    cmap_to_plot = view(vsup_rot, indices...)
+
     mi = meshimage!(
         ax_legend,
-        ax_legend.thetalimits[], 0..10,  rotl90(vsup_cmap), shading = NoShading, 
+        ax_legend.thetalimits[], 0..10, cmap_to_plot, shading = NoShading, 
     )
     mi.plots[1].interpolate[] = false
 end

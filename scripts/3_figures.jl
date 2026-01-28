@@ -31,8 +31,70 @@ annual_stats = CSV.read(joinpath("data", "fig_1_annual_stats.csv"), DataFrame)
 municipality_stats = CSV.read(joinpath("data", "fig_1_municipality_stats.csv"), DataFrame)
 municipality_stats.geometry = eval.(Meta.parse.(municipality_stats.geometry)) # silly but it works
 
+###### Climate data over time and space
+climate = get_terraclimate((:tavg, :ppt))
+ollerenshaw = FasciolaDK.get_ollerenshaw()
+
+climate = merge(climate, (; ollerenshaw))
+climatenormals = dropdims(mean(climate; dims = :year); dims = :year)
+yearly_anomalies = maplayers(climate, climatenormals) do c, n
+    mean.(skipmissing.(eachslice(c .- n; dims = Rasters.commondims(dims(c), (:year, :season)))))
+end
+yearly_anomalies.ollerenshaw .+= mean(skipmissing(ollerenshaw)) # we actually don't want anomalies here
+
+climatenormals_yearly = dropdims(mean(climatenormals; dims = :season); dims = :season)
+climatenormals_yearly.ppt .*= 4 # to get seasonal totals
+
+fig1 = let season_names = [            
+        1 => "Winter", 
+        2 => "Spring", 
+        3 => "Summer", 
+        4 => "Autumn"
+    ],
+    names = (tavg = "Temperature", ppt = "Precipitation", ollerenshaw = "Ollerenshaw index"),
+    colorbarlabels = (
+        tavg = "Annual average temperature (°C)", 
+        ppt = "Annual total precipitation (mm)",
+        ollerenshaw = "Annual Ollerenshaw index"
+    )
+
+    # AoG specification
+    spec = data(yearly_anomalies) * mapping(
+        :year => "",
+        [:tavg, :ppt, :ollerenshaw] .=> ["Anomaly (°C)", "Anomaly (mm)", "Ollerenshaw index"],
+        col = AlgebraOfGraphics.dims(1) => renamer(collect(names)),
+        linestyle = :season => renamer(season_names)
+    ) * visual(Lines)
+
+    figuregrid = draw(
+        spec, 
+        axis = (limits = (2010, 2023, nothing, nothing), xticks = 2010:2:2024, xminorgridvisible = true, titlesize = 14),
+        figure = (title ="Seasonal weather anomalies", titlealign = :center, size = (1100, 800), fontsize = 12)
+    )
+
+    fig = figuregrid.figure
+
+    for (i, var, cmap) in zip(1:3, keys(names), [:magma, :blues, :viridis])
+        ax = Axis(fig[2,i])
+        hidedecorations!(ax); hidespines!(ax)
+        pl = FasciolaDK.plot_denmark!(ax, climatenormals_yearly[var]; colormap = cmap)
+        Colorbar(fig[3,i], pl; 
+            label = colorbarlabels[var], 
+            labelfont = :bold,
+            vertical = false
+        )
+    end
+    for i in 1:3
+        Label_subplot(fig[1,i,Top()], i, fontsize = 14)
+        Label_subplot(fig[2,i], i+3, fontsize = 14)
+    end
+
+    fig
+end;
+save("images/figure1.png", fig1; pt_per_unit = 10)
+
 # Generate color matrix
-fig1 = let years = 2010:2023
+fig2 = let years = 2010:2023
     vsup_cmap = vsup_colormatrix(; 
         cmap = cgrad(:viridis), n_uncertainty = 4, 
         max_desat = 0.7, pow_desat = 1.0, max_light = 0.7, pow_light = 1
@@ -92,70 +154,7 @@ fig1 = let years = 2010:2023
     fig
 end;
 
-save("images/figure1.png", fig1; pt_per_unit = 10)
-
-###### Climate data over time and space
-climate = get_terraclimate((:tavg, :ppt))
-ollerenshaw = FasciolaDK.get_ollerenshaw()
-
-climate = merge(climate, (; ollerenshaw))
-climatenormals = dropdims(mean(climate; dims = :year); dims = :year)
-yearly_anomalies = maplayers(climate, climatenormals) do c, n
-    mean.(skipmissing.(eachslice(c .- n; dims = Rasters.commondims(dims(c), (:year, :season)))))
-end
-yearly_anomalies.ollerenshaw .+= mean(skipmissing(ollerenshaw)) # we actually don't want anomalies here
-
-climatenormals_yearly = dropdims(mean(climatenormals; dims = :season); dims = :season)
-climatenormals_yearly.ppt .*= 4 # to get seasonal totals
-
-fig2 = let season_names = [            
-        1 => "Winter", 
-        2 => "Spring", 
-        3 => "Summer", 
-        4 => "Autumn"
-    ],
-    names = (tavg = "Temperature", ppt = "Precipitation", ollerenshaw = "Ollerenshaw index"),
-    colorbarlabels = (
-        tavg = "Annual average temperature (°C)", 
-        ppt = "Annual total precipitation (mm)",
-        ollerenshaw = "Annual Ollerenshaw index"
-    )
-
-    # AoG specification
-    spec = data(yearly_anomalies) * mapping(
-        :year => "",
-        [:tavg, :ppt, :ollerenshaw] .=> ["Anomaly (°C)", "Anomaly (mm)", "Ollerenshaw index"],
-        col = AlgebraOfGraphics.dims(1) => renamer(collect(names)),
-        linestyle = :season => renamer(season_names)
-    ) * visual(Lines)
-
-    figuregrid = draw(
-        spec, 
-        axis = (limits = (2010, 2023, nothing, nothing), xticks = 2010:2:2024, xminorgridvisible = true, titlesize = 14),
-        figure = (title ="Seasonal weather anomalies", titlealign = :center, size = (1100, 800), fontsize = 12)
-    )
-
-    fig = figuregrid.figure
-
-    for (i, var, cmap) in zip(1:3, keys(names), [:magma, :blues, :viridis])
-        ax = Axis(fig[2,i])
-        hidedecorations!(ax); hidespines!(ax)
-        pl = FasciolaDK.plot_denmark!(ax, climatenormals_yearly[var]; colormap = cmap)
-        Colorbar(fig[3,i], pl; 
-            label = colorbarlabels[var], 
-            labelfont = :bold,
-            vertical = false
-        )
-    end
-    for i in 1:3
-        Label_subplot(fig[1,i,Top()], i, fontsize = 14)
-        Label_subplot(fig[2,i], i+3, fontsize = 14)
-    end
-
-    fig
-end;
 save("images/figure2.png", fig2; pt_per_unit = 10)
-
 
 ##### Posterior estimatse
 import StatsFuns: logistic

@@ -1,2 +1,10 @@
+# ignore input data
 data
-images
+
+# Ignore all .csv files except posteriors_table.csv
+*.csv
+!posteriors_table.csv
+
+# Ignore all .png files except figure*.png
+*.png
+!figure*.png

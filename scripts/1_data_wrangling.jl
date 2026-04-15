@@ -3,18 +3,13 @@ import DataFrames: combine # to disambiguate from Rasters.combine
 import Rasters: dims
 years = 2010:2023
 
+# Run this once to download the data
 # FasciolaDK.download_terraclimate((:pet, :tmin, :tmax, :ppt, :def, :soil), "data/terraclimate_dk.nc"; silent = false)
 
-#=
-climate = get_terraclimate()
-
-function calculate_risk(rs::RasterStack)
-    degree_days = max.(rs.tavg .- 10, 0)
-    degree_days .* rs.ppt
-end
-=#
 dyr, dyrtilbes, slagt, fund, beskart, bes_chr, besbrugsart, koord, udstationeringer = load_registry()
 beskoord = innerjoin(koord, bes_chr, on = :CHRNR)
+n_records = Dict{String, Int}() # to keep track of when records are filtered out!
+
 #### Data wrangling ####
 
 ## Combine animals, slagt, and fund - including initial filtering
@@ -30,6 +25,7 @@ for c in slfundkoder
 end
 dyr_slagt.liverdisease = vec(any(Array(dyr_slagt[:, filter(!(==(Symbol(377))), slfundkoder)]); dims = 2))
 dyr_slagt.flukes = dyr_slagt[:, Symbol(377)]
+n_records["all_animals"] =  nrow(dyr_slagt)
 
 ## Initial filtering on just birth and slaughter dates
 # We only want animals born in spring and slaughtered in autumn of the next year
@@ -42,11 +38,11 @@ dyr_slagt_sel = dyr_slagt[
     3 .<= month.(dyr_slagt.FOEDSELSDATO) .<= 6,
     [:DYR_ID, :RACE_ID, :FOEDSELSDATO, :SLAGTDATA_ID, :SLAGTBES_ID, :SLAGTDATO, :liverdisease, :flukes]
 ]
+n_records["age_range"] = nrow(dyr_slagt_sel)
 
 # Filter out animals with race_id 1201, 1202, and 1203 as these are milk cattle
 dyr_slagt_nodairyraces = dyr_slagt_sel[dyr_slagt_sel.RACE_ID .> 1203, :]
-
-sort(collect(countmap(dyr_slagt_sel.RACE_ID)), by = last, rev = true)
+n_records["not_dairy_race"] = nrow(dyr_slagt_nodairyraces)
 
 #select!(dyr_slagt_fund, Not(:SLAGTDATA_ID, :FOEDSELSDATO))
 
@@ -102,10 +98,12 @@ animals_sel = DataFrames.combine(dyr_bes_brugsart_grp) do g
     end
 end
 filter!(x -> !iszero(x.BES_ID), animals_sel)
+n_records["registered_as_beef"] = nrow(animals_sel)
 
 # Filter out animals that have been sent to a different herd during the relevant time
 dyr_udstationeret = Set(udstationeringer.DYR_ID)
 filter!(r -> !in(r.DYR_ID, dyr_udstationeret), animals_sel)
+n_records["not_grazing_elsewhere"] = nrow(animals_sel)
 
 # join on data about slagtedato, 
 animals_w_data = innerjoin(animals_sel, dyr_slagt_nodairyraces, on = :DYR_ID)
@@ -124,6 +122,7 @@ animals_w_slagteri = innerjoin(animals_w_data, slagtbes_to_slagteri_id, on = :SL
 
 # finally filter out any bes that have very few animals - to reduce the complexity of the problem
 animals_filtered2 = combine(identity, filter(x -> nrow(x) >= 10, groupby(animals_w_slagteri, :BES_ID)))
+n_records["bes_over_10_animals"] = nrow(animals_filtered2)
 
 ## Now that we have all the animals we want, group them into cohorts based on bes and yr
 cohorts_grps = groupby(animals_filtered2, [:BES_ID, :yr, :slagteri_id])
@@ -135,10 +134,25 @@ cohorts = combine(cohorts_grps,
 )
 bes_included = unique(cohorts.BES_ID)
 
+cohorts_with_chr = innerjoin(cohorts, bes_chr, on = :BES_ID)
+
+vetstat_cohorts = innerjoin(cohorts_with_chr, vetstat; on = [:CHRNR, :yr])
+chr_included = unique(cohorts_with_chr.CHRNR)
+vetstat_included = filter(x -> x.CHRNR in chr_included, vetstat)
+
 ## Read in climate data
 climateobs = get_terraclimate((:tavg, :ppt, :def, :soil))
-ollerenshaw = FD.get_ollerenshaw()
-climate = merge(climateobs, (; ollerenshaw))
+ollerenshaw = FasciolaDK.get_ollerenshaw()
+
+climate_expanded = mapreduce(merge, layers(climateobs)) do x
+    RasterStack(x; layersfrom = :season, name = string(Rasters.name(x)) .* "_" .* ["winter", "spring", "summer", "autumn"])
+end
+climate_nolag = merge(climate_expanded, (; ollerenshaw))
+
+climate_all = FasciolaDK.add_lagged_vars(climate_nolag)
+
+seasons_to_exclude = ("winter_lag1", "autumn")
+climate = climate_all[filter(x -> !any(y -> endswith(string(x), y), seasons_to_exclude), keys(climate_all))]
 
 # Combine climate and 
 bes_lat_lon = DimVector(tuple.(beskoord.LON, beskoord.LAT), Dim{:BES_ID}(beskoord.BES_ID))
@@ -147,28 +161,18 @@ besclimate = map(bes_lat_lon_included) do (x,y)
     src = climate[X = Near(x), Y = Near(y)]
 end |> RasterSeries |> Rasters.combine
 
-besclimate_seasonal = mapreduce(merge, layers(besclimate)) do x
-    if hasdim(x, :season)
-        RasterStack(x; layersfrom = :season, 
-            name = string(Rasters.name(x)) .* "_" .* ["winter", "spring", "summer", "autumn"])
-    else
-        RasterStack(x)
-    end
-end
-
 idx_no_climatedata = findall(x -> any(ismissing, x), eachslice(first(layers(besclimate)); dims = :BES_ID))
-bes_no_climatedata = lookup(dims(besclimate_seasonal, :BES_ID))[idx_no_climatedata]
+bes_no_climatedata = lookup(dims(besclimate, :BES_ID))[idx_no_climatedata]
 cohorts_w_climatedata = filter(cohorts) do r
     !(r.BES_ID in bes_no_climatedata)
 end
 
 # put everything into a single DF
 predictorsdf = map(eachrow(cohorts_w_climatedata)) do r
-   merge(besclimate_seasonal[year = At(r.yr), BES_ID = At(r.BES_ID)], r)
+   merge(besclimate[year = At(r.yr), BES_ID = At(r.BES_ID)], r)
 end |> DataFrame 
 
 # Normalize all the data columns in predictorsdf
-climatevars = keys(besclimate_seasonal)
 # get means and stds, save those and then Normalize
 function normalize!(x)
     m = mean(x)
@@ -176,10 +180,11 @@ function normalize!(x)
     x .= (x .- m) ./ s
     return (m,s)
 end
-means_stds = map(keys(besclimate_seasonal)) do var
+means_stds = map(keys(besclimate)) do var
     m,s = normalize!(predictorsdf[!, Symbol(var)])
-end |> NamedTuple{keys(besclimate_seasonal)}
+end |> NamedTuple{keys(besclimate)}
 
+CSV.write("vars_normalized.csv", (map(collect, means_stds)))
 ## In-text numbers
 topct(x) = string(round(x * 100, digits=2)) * "%"
 in_text_numbers = [

@@ -1,14 +1,12 @@
 library(INLA)
-library(geodata)
 library(spdep)
 library(dplyr)
 # 
-geodata_path("/home/tvd/data/rgeodata")
 
 dk <- gadm("DNK", level = 0)
 dkbdry <- inla.sp2segment(sf::st_as_sf(dk))
 
-data <- read.csv("/home/tvd/K/predictors.csv")
+data <- read.csv("/home/tvd/K/fasciolaDK/predictors.csv")
 data$øko = as.numeric(data$øko == "true")
 data$besid <- dense_rank(data$BES_ID)
 data$logsize <- log(data$bes_size)
@@ -58,15 +56,16 @@ runinla <- function(x) inla(
 # normal variables - include or not
 random_vars <- c(
   øko = "øko", 
-  besid = 'f(besid, model = "iid")',
+  besid = 'f(besid, model = "iid", hyper = list(prec = list(prior = "pc.prec", param = c(1.0, 0.10))))',
   slagtid = 'f(slagteri_id, model = "iid")'
-  #tempanomaly = "tavg_winter + tavg_spring + tavg_summer",
-  #precanomaly = "ppt_winter + ppt_spring + ppt_summer"
 )
 
 vars <- c("tavg", "ppt", "soil", "def")
-seasons <- c("winter", "spring", "summer", "autumn")
-env_vars <- c(as.vector(outer(vars, seasons, function(x,y) paste(x,y,sep="_"))), "ollerenshaw", "1")
+seasons <- c("spring_lag1", "summer_lag1", "autumn_lag1", "winter", "spring", "summer")
+env_vars <- c(
+  as.vector(outer(vars, seasons, function(x,y) paste(x,y,sep="_"))), 
+  "ollerenshaw", "ollerenshaw_lag1", "1"
+)
 
 # spacetime - multiple options
 vars_spacetime <- c(
@@ -165,132 +164,119 @@ write.csv(
   paste0("model_runs_posteriors", Sys.Date(), ".csv"), row.names = FALSE, na = ""
 )
 
-###
-formula <- y ~ øko + f(besid, model = "iid") + f(slagteri_id, model = "iid") + 
-    f(space, model = spde) + soil_spring + tavg_summer - 1 + Intercept
+##################
+# Explore combinations of variables
 
-res <- runinla(formula)
+# Identified by earlier exploratory analysis as best candidates 
+candidate_vars <- c(
+  "ppt_summer_lag1", "tavg_summer_lag1", "soil_summer_lag1", 
+  "soil_autumn_lag1", "def_spring_lag1") 
+  
+# all combos of size = 2
+candidate_combos <- apply(combn(candidate_vars, 2), 2, paste, collapse = " + ")
+
+forms <- sapply(candidate_combos, function(x) as.formula(
+  paste("y ~ ", 
+  vars_spacetime["spacetime"], "+", 
+  paste(random_vars, collapse = "+"), 
+  "-1 + Intercept + ", x)))
+
+results <- lapply(forms, runinla)
+result_summary <- lapply(results, function(res) {
+  # fixed effects: pick mean, 0.025 and 0.975 quantiles for each fixed-effect row
+  fixed_names <- rownames(res$summary.fixed)
+  posterior_fixed <- sapply(fixed_names, function(v) {
+    c(res$summary.fixed[v, "mean"],
+      res$summary.fixed[v, "0.025quant"],
+      res$summary.fixed[v, "0.975quant"])
+  }, simplify = "array")
+
+  # make rownames consistent with earlier code
+  rownames(posterior_fixed) <- c("mean", "quant0.025", "quant0.975")
+  colnames(posterior_fixed) <- c("øko", "Intercept", "envvar1", "envvar2")
+  posterior_fixed_v <- mat_to_vect(posterior_fixed)
+
+  # i.i.d. random effects (all your candidate models include these)
+  besid_var <- parse_precision(res, "besid")
+  slagtid_var <- parse_precision(res, "slagteri_id")
+
+  # combine into a single named numeric vector
+  c(posterior_fixed_v, besid_var, slagtid_var)
+}
+)
+results_df <- bind_rows(result_summary)
+results_df$formula <- candidate_combos
+
+
+results_df$mlik <- sapply(results, function(x) x$mlik[2])
+results_df$waic <- sapply(results, function(x) x$waic$waic)
+results_df$dic <- sapply(results, function(x) x$dic$dic)
+results_df$dic_sat <- sapply(results, function(x) x$dic$dic.sat)
+
+which(results_df$mlik == max(results_df$mlik))
+which(results_df$waic == min(results_df$waic))
+
+write.csv(results_df, paste0("candidate_models_two_vars_", Sys.Date(), ".csv"), row.names = FALSE)
+
 
 
 #############
 ## Write for spatio-temporal effect
-spacetime_formula <- y ~ øko + f(besid, model = "iid") + f(slagteri_id, model = "iid") + 
-    1 + f(space, model = spde, group = year, control.group = list(model = "ar1", 
-    hyper = list(rho = list(prior = "pc.cor1", param = c(0.8, 
-        0.8))))) - 1 + Intercept
+spacetime_formula_base <- as.formula(paste(
+  "y ~ ", paste(random_vars, collapse = " + "), "-1 + Intercept + ", vars_spacetime["spacetime"]))
 
+optimal_model <- update(spacetime_formula_base, y ~ . + ppt_summer_lag1 + tavg_summer_lag1)
 
 # Run inla with the model with besid, øko and spatiotemporal effect
 #spacetime_formula <- last(model_list$formula)
-res <- runinla(spacetime_formula)
+res <- runinla(optimal_model)
 
+# export for estimates of abattoir random effect
 write.csv(res$summary.random$slagteri_id, "slagteri_posterior.csv", row.names = FALSE)
 
-samples <- inla.posterior.sample(500, res)
-tail(samples[[1]]$latent)
-
-predict(res, fm_pixels(mesh))
-
-#### Attempts to properly export posteroir spaciotemporal component
+#### Export posteroir spatiotemporal component
 library(fmesher)
 library(terra)
 library(ncdf4)
 
-nsamples <- 100
-
-
-sapply(samples, function(s) s$hyperpar["Precision for besid"])
-
+nsamples <- 500
 samples <- inla.posterior.sample(nsamples, res)
+
 space_indices <- grep("space", rownames(samples[[1]]$latent))
 space_samples <- lapply(samples, function(s) s$latent[space_indices])
-intercepts <- sapply(samples, function(s) s$latent[nrow(s$latent)])
 
-dkrast <- rasterize(dk, rast(dk, res = 0.05), touches = TRUE)
+dkrast <- rast("data/terraclimate_dk.nc", lyrs = 1)
 dkpoints <- crds(dkrast, na.rm = TRUE)
 ev <- fm_evaluator(mesh, loc = dkpoints)
-ev2 <- fm_evaluator(mesh, loc = crds(vect(data[1:1, c("LON", "LAT")], geom = c("LON", "LAT"))))
 
 rast_template <- rast(dkrast, nlyrs = 14)
 namask <- !is.na(dkrast)
 
 for (i in 1:nsamples){
+  print(i)
   mmat <- matrix(space_samples[[i]], nrow = mesh$n)
-  vals <- fm_evaluate(ev, mmat) + intercepts[[i]]
+  vals <- fm_evaluate(ev, mmat)
   rast_template[namask] <- c(vals)
-  writeRaster(rast_template, paste0("/home/tvd/K/posterior_spatiotemporal", i, ".tif"), overwrite = TRUE)
+  writeRaster(rast_template, paste0("/home/tvd/K/fasciolaDK/posterior_spatiotemporal", i, ".tif"), overwrite = TRUE)
 }
 
+## Write estimates for the effects of the two environmental variables in each sample
+vars_to_export <- c("øko", "Intercept", "ppt_summer_lag1", "tavg_summer_lag1")
+effects <- lapply(samples, function(s) s$latent[paste0(vars_to_export, ":1"),])
+effects_df <- data.frame(do.call(rbind, effects))
+colnames(effects_df) <- vars_to_export
+write.csv(effects_df, paste0("posterior_effects_envvars_samples", Sys.Date(), ".csv"), row.names = FALSE)
+
 ####### Effect of year
-year_formula <- update(spacetime_formula, y ~ . + year)
-res_year <- runinla(year_formula)
+# Run models with year as linear predictor, with and without environmental variables
+formula_year <- update(spacetime_formula_base, y ~ . + year)
+optimal_formula_year <- update(optimal_model, y ~ . + year)
+
+res_optimal_year <- runinla(optimal_formula_year)
+res_year <- runinla(formula_year)
 
 # Export posteriors
-posterior_fixed <- apply(res_year$summary.fixed, 1, function(x) c(x["mean"], x["0.025quant"], x["0.975quant"]))
-rownames(posterior_fixed) <- c("mean", "quant0.025", "quant0.975")
-posterior_fixed_v <- mat_to_vect(posterior_fixed)
+year_posterior <- rbind(res_year$summary.fixed["year",], res_optimal_year$summary.fixed["year",])[c("mean", "0.025quant", "0.975quant")]
+rownames(year_posterior) <- c("year_simple", "year_with_environment")
 
-# i.i.d. posteriors
-besid_var <- parse_precision(res, "besid")
-slagtid_var <- parse_precision(res, "slagteri_id")
-vars <- c(posterior_fixed_v, besid_var, slagtid_var)
-write.csv(data.frame(vars), paste0("posteriors_year", Sys.Date(), ".csv"))
-
-###### Playground
-# No clear effect of year
-r5 <- runinla(y ~ 1 + f(space, model = spde) - 1 + Intercept)
-
-r2 <- runinla(y ~ øko)
-samples2 <- inla.posterior.sample(2, r2)
-
-
-r3 <- runinla(y ~ 0 + øko)
-samples2 <- inla.posterior.sample(2, r4)
-
-# Including slagteri_id does improve the fit!
-res <- runinla(y ~ øko + yr + f(space, model = spde) + f(year, model = "ar1") + f(slagteri_id, model = "iid"))
-
-sample = samples[[1]]
-predictor_indices <- grep("^Predictor", rownames(sample$latent))
-apredictor_indices <- grep("APredictor", rownames(sample$latent))
-space_indices <- grep("space", rownames(sample$latent))
-slagteri_indices <- grep("slagteri_id", rownames(sample$latent))
-bes_indices <- grep("besid", rownames(sample$latent))
-
-r2$summary.fitted.values
-
-head(sample$latent[predictor_indices], 20)
-head(sample$latent[apredictor_indices], 20)
-
-pred <- sample$latent[apredictor_indices]
-space_posterior <- sample$latent[space_indices]
-slagteri_posterior <- sample$latent[slagteri_indices]
-bes_posterior <- sample$latent[bes_indices]
-
-intercept <- sample$latent[length(sample$latent)]
-øko <- sample$latent[length(sample$latent)-1]
-
-data$mean_pred <- r3$summary.fitted.values[idx$data, "mean"]
-res$summary.random$slagteri_id[, "mean"]
-
-res$summary.fitted.values[idx$data[9228],]
-res$summary.random$besid[data$besid[9228],]
-res$summary.random$slagteri_id[data$slagteri_id[9228]+1,]
-
-data$mean_pred <- pred
-data$besid_pred <- bes_posterior[data$besid]
-data$slagteri_pred <- slagteri_posterior[data$slagteri_id+1]
-data$spat_pred <- (A %*% space_posterior)[,1]
-
-data$spat_pred + data$slagteri_pred + data$besid_pred - data$mean_pred
-
-p.pred<-exp(post.mean.pred.logit)/(1 + exp(post.mean.pred.logit))
-
-rownames(res$summary.random$space)
-nrow(res$summary.random$space)
-
-
-
-head(data)
-
-predictor_indices[idx$data]
+write.csv(year_posterior, paste0("posteriors_year", Sys.Date(), ".csv"))

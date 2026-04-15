@@ -10,6 +10,8 @@ dyr, dyrtilbes, slagt, fund, beskart, bes_chr, besbrugsart, koord, udstationerin
 beskoord = innerjoin(koord, bes_chr, on = :CHRNR)
 n_records = Dict{String, Int}() # to keep track of when records are filtered out!
 
+dyr.male = .!iseven.(dyr.KONK_ID)
+
 #### Data wrangling ####
 
 ## Combine animals, slagt, and fund - including initial filtering
@@ -122,7 +124,6 @@ animals_w_slagteri = innerjoin(animals_w_data, slagtbes_to_slagteri_id, on = :SL
 
 # finally filter out any bes that have very few animals - to reduce the complexity of the problem
 animals_filtered2 = combine(identity, filter(x -> nrow(x) >= 10, groupby(animals_w_slagteri, :BES_ID)))
-n_records["bes_over_10_animals"] = nrow(animals_filtered2)
 
 ## Now that we have all the animals we want, group them into cohorts based on bes and yr
 cohorts_grps = groupby(animals_filtered2, [:BES_ID, :yr, :slagteri_id])
@@ -133,12 +134,6 @@ cohorts = combine(cohorts_grps,
     nrow => :count
 )
 bes_included = unique(cohorts.BES_ID)
-
-cohorts_with_chr = innerjoin(cohorts, bes_chr, on = :BES_ID)
-
-vetstat_cohorts = innerjoin(cohorts_with_chr, vetstat; on = [:CHRNR, :yr])
-chr_included = unique(cohorts_with_chr.CHRNR)
-vetstat_included = filter(x -> x.CHRNR in chr_included, vetstat)
 
 ## Read in climate data
 climateobs = get_terraclimate((:tavg, :ppt, :def, :soil))
@@ -205,7 +200,93 @@ open(joinpath("in_text_numbers.txt"), "w") do io
     end
 end
 
-## Export
+n_records["included"] = sum(predictorsdf.count)
+n_records["excluded_birth_slaughter_dates"] = n_records["all_animals"] - n_records["age_range"]
+n_records["excluded_dairy_races"] = n_records["age_range"] - n_records["not_dairy_race"]
+n_records["excluded_non_beef_herds"] = n_records["not_dairy_race"] - n_records["registered_as_beef"]
+n_records["excluded_grazing_elsewhere"] = n_records["registered_as_beef"] - n_records["not_grazing_elsewhere"]
+n_records["excluded_bes_under_ten_animals"] = n_records["not_grazing_elsewhere"] - n_records["included"]
+
+open("records_filtering_data.tex", "w") do f
+    for (key, value) in n_records
+        # Convert snake_case to PascalCase for command name
+        write(f, "\\newcommand{\\$(replace(key, "_" => ""))}{$value}\n")
+    end
+end
+
+
+## Export predictors
 predictors_with_lonlat = innerjoin(predictorsdf, beskoord[!, [:BES_ID, :LON, :LAT]], on = :BES_ID)
 CSV.write(joinpath(datadir, "..", "predictors.csv"), predictors_with_lonlat)
+
+## Write files for plotting
+import GADM, GeometryBasics, GeoInterface as GI, GeometryOps as GO
+## Figure 1 - data over time
+all_animals = dyr_slagt[:, [:SLAGTDATO, :liverdisease, :flukes]]
+all_animals.yr = year.(all_animals.SLAGTDATO .- Month(3))
+
+all_animals_yearly, selected_animals_yearly = map((all_animals, animals_filtered2)) do d
+    combine(groupby(d, :yr)) do g
+        n = nrow(g)
+        (   
+            n = n,
+            liver = count(g.liverdisease) / n,
+            flukes = count(g.flukes) / n
+        )
+    end
+end
+all_animals_yearly.scope .= "All cattle"
+selected_animals_yearly.scope .= "Selected cattle"
+annual_stats = vcat(all_animals_yearly, selected_animals_yearly)
+CSV.write(joinpath("data", "fig_1_annual_stats.csv"), annual_stats)
+
+## Figure 1 - data per municipality
+# danish municipalities
+dk_munic = DataFrame(GADM.get("DNK"; depth = 2))
+dk_munic.geometry = GI.convert.(Ref(GeometryBasics), dk_munic.geom)
+dk_munic.munic_id = 1:nrow(dk_munic)
+munic_key = CSV.read(joinpath("data", "munics.csv"), DataFrame)
+dk_municgrps = leftjoin(dk_munic, munic_key, on = [:munic_id, :NAME_2])
+dk_grps = combine(groupby(dk_municgrps, :group)) do g
+    # either return just the group and geometry, or use Geometryops to union geometries
+    geometry = if nrow(g) == 1
+        g.geometry[1]
+    else 
+       mp = reduce((x,y) -> GO.union(x,y; target = GO.GI.MultiPolygonTrait()), g.geometry)
+       GI.convert(GeometryBasics, mp)
+    end
+    name = first(g.NAME_2)
+    return (; geometry, name)
+end
+dk_grps.group .= 1:nrow(dk_grps)
+findfirst(x -> contains(x, "Frederikshavn"), dk_grps.name)
+
+# besætninger and their coordinates
+besgeom = beskoord[!, [:BES_ID, :LAT, :LON]]
+filter!(r -> r.BES_ID in bes_included, besgeom)
+besgeom.geometry = tuple.(besgeom.LON, besgeom.LAT)
+
+# find municipality for each cohort
+find_first_munic(co; dk_munic = dk_munic) = findfirst(g -> GO.within(co, g), dk_munic.geometry)
+besgeom.group = find_first_munic.(besgeom.geometry; dk_munic = dk_grps)
+animals_koords = innerjoin(animals_filtered2, besgeom, on = :BES_ID)
+# calculate stats for each municipality
+municipality_stats = combine(groupby(animals_koords, :group)) do g
+    n = nrow(g)
+    nbes = nrow(unique(g[!, [:LAT, :LON]]))
+    (   
+        n = n,
+        nbes = nbes,
+        liver = count(g.liverdisease) / n,
+        flukes = count(g.flukes) / n
+    )
+end
+municipality_stats = rightjoin(municipality_stats, dk_grps[:, [:group, :geometry]], on = :group)
+@assert all(>(5), municipality_stats.nbes)
+for c in [:n, :liver, :flukes]
+    municipality_stats[!, c] .= Missings.replace(municipality_stats[!, c], 0)
+end
+CSV.write(joinpath("data", "fig_1_municipality_stats.csv"), municipality_stats)
+
+
 

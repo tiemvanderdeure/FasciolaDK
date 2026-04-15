@@ -1,5 +1,8 @@
 using GADM, DataFrames, Makie, GeoMakie
 import Colors: HSL, LCHuv
+import GeometryBasics
+import GeometryOps as GO
+import GeoInterface as GI
 
 # Plot Denmark with bornholm on a inset
 function plot_denmark!(ax, ras::Raster; kw...)
@@ -8,6 +11,36 @@ function plot_denmark!(ax, ras::Raster; kw...)
     dk[Extent(X = (11.8, 12.5), Y = (56.8, 57.5))] .= parent(bornholm)
     poly!(ax, Rect2(11.85, 56.8,0.75,0.75), color = :transparent, strokecolor = :black, strokewidth = 1)
     plot!(ax,dk; kw...)
+end
+
+# Plot Denmark with bornholm on a inset
+function plot_denmark!(ax, geoms::AbstractVector{<:GeometryBasics.AbstractGeometry}; kw...)
+    bornholm_extent = Extent(X = (14.5, 15.2), Y = (54.8, 55.5))
+    geoms_to_plot = map(geoms) do g
+        GO.intersects(g, bornholm_extent) || return g
+        g_new = GO.apply(GI.PointTrait(), g) do p
+            (GI.x(p) - 2.65, GI.y(p) + 2)
+        end
+        GI.convert(GeometryBasics, g_new)
+    end
+    poly!(ax, Rect2(11.85, 56.8,0.75,0.75), color = :transparent, strokecolor = :black, strokewidth = 1)
+    poly!(ax, geoms_to_plot; kw...)
+end
+
+## Convenience functions
+function to_pct_label(x)
+    x1 = x .* 100
+    xround = round.(Int, x1)
+    x2 = all(isapprox.(x1, xround)) ? xround : x1
+    return string.(x2) .* "%"
+end
+
+function Label_subplot(gp, n; kw...)
+    text = "$('A'+(n-1)))"
+    Label(
+        gp, text, font = :bold, tellheight = false, tellwidth = false, 
+        halign = :left, valign = :top; kw...
+    )
 end
 
 ##### For Figure 2 - which is a VSUP (Value-Suppressing Uncertainty Palettes) plot

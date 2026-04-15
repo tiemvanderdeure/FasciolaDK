@@ -50,7 +50,7 @@ fig1 = let
     # AoG specification
     spec = data(yearly_anomalies) * mapping(
                :year => "",
-               [:tavg, :ppt, :ollerenshaw, :soil, :def] .=> ["Anomaly (°C)", "Anomaly (mm)", "Ollerenshaw index", "Anomaly (mm)", "Anomaly (mm)"],
+               [:tavg, :ppt, :soil, :def, :ollerenshaw] .=> ["Anomaly (°C)", "Anomaly (mm)", "Ollerenshaw index", "Anomaly (mm)", "Anomaly (mm)"],
                col=AlgebraOfGraphics.dims(1) => renamer(collect(names)),
                linestyle=:season => renamer(season_names)
            ) * visual(Lines)
@@ -75,11 +75,12 @@ fig1 = let
             vertical=false
         )
     end
+    # Add labels A-B-C to the subplots
     for i in 1:length(names)
         Label_subplot(fig[1, i, Top()], i, fontsize=14)
-        Label_subplot(fig[2, i], i + 3, fontsize=14)
     end
 
+    # Move contents around -- kind of annoying
     for i in 1:3
         for j in 1:3
             for c in contents(fig[j, i+3])
@@ -98,8 +99,10 @@ fig1 = let
     hidespines!(ax)
     plot_denmark!(ax, polys_by_area, color=:lightgray, strokecolor=:black, strokewidth=0.5)
 
-    text!(ax, GO.centroid.(polys_by_area[1:4]); text=["Jutland", "Zealand", "", "Fynen"],
+    text!(ax, GO.centroid.(polys_by_area[1:4]); text=["Jutland", "Zealand", "", "Funen"],
         fontsize=16, font=:bold, align=(:center, 0.5))
+    Label_subplot(fig[5, 3], 6, fontsize=14)
+
     tightlimits!(ax)
 
     fig

@@ -1,12 +1,13 @@
 library(INLA)
 library(spdep)
 library(dplyr)
-# 
 
+library(geodata)
+geodata_path("/home/tvd/data/rgeodata")
 dk <- gadm("DNK", level = 0)
 dkbdry <- inla.sp2segment(sf::st_as_sf(dk))
 
-data <- read.csv("/home/tvd/K/fasciolaDK/predictors.csv")
+data <- read.csv("/home/tvd/K/FasciolaDK/predictors.csv")
 data$øko = as.numeric(data$øko == "true")
 data$besid <- dense_rank(data$BES_ID)
 data$logsize <- log(data$bes_size)

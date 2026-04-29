@@ -50,7 +50,7 @@ fig1 = let
     # AoG specification
     spec = data(yearly_anomalies) * mapping(
                :year => "",
-               [:tavg, :ppt, :soil, :def, :ollerenshaw] .=> ["Anomaly (°C)", "Anomaly (mm)", "Ollerenshaw index", "Anomaly (mm)", "Anomaly (mm)"],
+               [:tavg, :ppt, :ollerenshaw, :soil, :def] .=> ["Anomaly (°C)", "Anomaly (mm)", "Ollerenshaw index", "Anomaly (mm)", "Anomaly (mm)"],
                col=AlgebraOfGraphics.dims(1) => renamer(collect(names)),
                linestyle=:season => renamer(season_names)
            ) * visual(Lines)
@@ -404,7 +404,7 @@ table2 = Table(vcat(headercells', datacells))
 
 #### Models with 2 variables:
 # read the candidate models CSV
-cand_df = CSV.read("candidate_models_two_vars_2026-03-10.csv", DataFrame)
+cand_df = CSV.read("candidate_models_two_vars_2026-04-29.csv", DataFrame)
 
 # add formatted rank columns
 cand_df.mlik_formatted = add_rank(cand_df.mlik; rev=true)

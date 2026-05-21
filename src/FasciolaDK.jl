@@ -2,6 +2,7 @@ module FasciolaDK
 
 using CSV, DataFrames, Dates, Statistics, StatsBase
 using Rasters, Rasters.Lookups, NCDatasets, GADM
+import Printf: @sprintf
 
 const datadir = "/home/tvd/K/FasciolaDK/slagtedata"
 

@@ -31,8 +31,10 @@ end
 function to_pct_label(x)
     x1 = x .* 100
     xround = round.(Int, x1)
-    x2 = all(isapprox.(x1, xround)) ? xround : x1
-    return string.(x2) .* "%"
+    # if xs are all integer percentages, don't print decimals
+    all(isapprox.(x1, xround)) && return string.(xround) .* "%"
+    # otherwise, print with 2 significant digits
+    return [(@sprintf "%.1f" x) * "%" for x in x1]
 end
 
 function Label_subplot(gp, n; kw...)

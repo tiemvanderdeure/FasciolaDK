@@ -11,9 +11,6 @@ dk_reg = GI.getfeature(GADM.get("DNK"; depth=0)) |> first |> GI.geometry
 dk_multipoly = GI.convert(GeometryBasics, dk_reg)
 polys_by_area = sort(dk_multipoly.polygons, by=GO.area, rev=true)
 
-koder_slfund = CSV.read(joinpath(datadir, "Koder_slagtefund.csv"), DataFrame)
-koder_slfund = NamedTuple(Symbol(r.SLFUNDKODE) => r.SLFUNDTEKST for r in eachrow(koder_slfund))
-
 ###### Climate data over time and space
 climate = FasciolaDK.get_terraclimate((:tavg, :ppt, :soil, :def))
 ollerenshaw = FasciolaDK.get_ollerenshaw()
@@ -461,3 +458,12 @@ doc = W.Document(
 )
 
 W.save(joinpath("images", "tables.docx"), doc)
+
+
+prev = filter(x -> x.scope == "Selected cattle", annual_stats).flukes
+yrs = filter(x -> x.scope == "Selected cattle", annual_stats).yr
+
+fig, ax, pl = with_theme(theme_minimal()) do
+    lines(yrs, prev, color = "black", axis = (ytickformat=to_pct_label,xticks = LinearTicks(5)), linewidth = 3)
+end
+save("images/prev_over_time_simple.png", fig; pt_per_unit=10)

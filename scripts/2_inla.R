@@ -254,11 +254,10 @@ rast_template <- rast(dkrast, nlyrs = 14)
 namask <- !is.na(dkrast)
 
 for (i in 1:nsamples){
-  print(i)
   mmat <- matrix(space_samples[[i]], nrow = mesh$n)
   vals <- fm_evaluate(ev, mmat)
   rast_template[namask] <- c(vals)
-  writeRaster(rast_template, paste0("/home/tvd/K/fasciolaDK/posterior_spatiotemporal", i, ".tif"), overwrite = TRUE)
+  writeRaster(rast_template, paste0("/home/tvd/K/FasciolaDK/posterior_spatiotemporal", i, ".tif"), overwrite = TRUE)
 }
 
 ## Write estimates for the effects of the two environmental variables in each sample

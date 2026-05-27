@@ -180,10 +180,9 @@ save("images/figure2.png", fig2; pt_per_unit=10)
 ##### Posterior estimates of the INLA model for prevalence over space and time
 import StatsFuns: logistic
 logistic(::Missing) = missing # tiny bit of type piracy to make this work
-posterior_mean = Raster(joinpath("/home/tvd/K", "posterior_space_time.nc"))
 
 # Random effect
-r_effect_raw = RasterSeries(joinpath("/home/tvd/K", "posterior_spatiotemporal.tif"), Dim{:iter}(Int)) |> Rasters.combine
+r_effect_raw = RasterSeries(joinpath("/home/tvd/K/FasciolaDK", "posterior_spatiotemporal.tif"), Dim{:iter}(Int)) |> Rasters.combine
 iter_sorted = sort(lookup(r_effect_raw, :iter)) # make sure the order is right here - file system re-orders these so 10 is before 2!
 r_effect = set(r_effect_raw[iter=At(iter_sorted)], Rasters.Band => Rasters.format(Dim{:year}(2010:2023))) # fix a dimension
 
@@ -216,17 +215,16 @@ intercepts = DimVector(getfield.(posterior_env_effect, :Intercept), dims(r_effec
 
 posterior_estimate_logscale = @d r_effect .+ env_effects_combined .+ intercepts strict = false
 
-extrema(posterior_estimate)
-
 posterior_estimate = logistic.(posterior_estimate_logscale)
 posterior_estimate_mean = dropdims(mean(posterior_estimate; dims=:iter); dims=:iter)
 maybe_quantile(x, args...) = any(ismissing, x) ? missing : quantile(x, args...)
-posterior_estimate_025 = rebuild(posterior_estimate_mean; data=
-parent(maybe_quantile.(eachslice(posterior_estimate; dims=otherdims(posterior_estimate, :iter)), 0.025))
-)
-posterior_estimate_975 = rebuild(posterior_estimate_mean; data=
-parent(maybe_quantile.(eachslice(posterior_estimate; dims=otherdims(posterior_estimate, :iter)), 0.975))
-)
+posterior_estimate_025 = rebuild(
+    posterior_estimate_mean; 
+    data=parent(maybe_quantile.(eachslice(posterior_estimate; dims=otherdims(posterior_estimate, :iter)), 0.025)))
+
+posterior_estimate_975 = rebuild(
+    posterior_estimate_mean; 
+    data=parent(maybe_quantile.(eachslice(posterior_estimate; dims=otherdims(posterior_estimate, :iter)), 0.975)))
 
 fig3, figs1, figs2 = map((posterior_estimate_mean, posterior_estimate_025, posterior_estimate_975)) do r
     let fig = Figure(size=(800, 900)),
@@ -459,7 +457,7 @@ doc = W.Document(
 
 W.save(joinpath("images", "tables.docx"), doc)
 
-
+# Simple figure for graphical abstract
 prev = filter(x -> x.scope == "Selected cattle", annual_stats).flukes
 yrs = filter(x -> x.scope == "Selected cattle", annual_stats).yr
 

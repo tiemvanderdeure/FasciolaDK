@@ -64,10 +64,11 @@ function process_terraclimate(climateraw)
 end
 
 function add_lagged_vars(climate)
-    climate_tm1_quarterly = set(climate[year = 1:End()-1], year = Dim{:year}(2010:2023))
-    climate_tm1_quarterly_rn = RasterStack(NamedTuple(Symbol.(string.(keys(climate)) .* "_lag1") .=> values(climate_tm1_quarterly)))
-    climate_quarterly_tm0 = climate[year = 2:End()]
-    return merge(climate_tm1_quarterly_rn, climate_quarterly_tm0)
+    climate_tm1_quarterly = set(climate[year = 1:End()-1], year = Dim{:year}(val(lookup(climate, :year))[2:end]))
+    climate_tm1_quarterly_yr1 = RasterStack(NamedTuple(
+        Symbol(string(k) * "_year1") => climate_tm1_quarterly[k] for k in keys(climate)))
+    climate_quarterly_yr2 = RasterStack(NamedTuple(Symbol(string(k) * "_year2") => climate[k] for k in keys(climate)))[year = 2:End()]
+    return merge(climate_tm1_quarterly_yr1, climate_quarterly_yr2)
 end
 
 

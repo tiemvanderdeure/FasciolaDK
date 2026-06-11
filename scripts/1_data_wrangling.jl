@@ -7,7 +7,7 @@ years = 2010:2023
 # FasciolaDK.download_terraclimate((:pet, :tmin, :tmax, :ppt, :def, :soil), "data/terraclimate_dk.nc"; silent = false)
 
 dyr, dyrtilbes, slagt, fund, beskart, bes_chr, besbrugsart, koord, udstationeringer = load_registry()
-beskoord = innerjoin(koord, bes_chr, on = :CHRNR)
+koord = innerjoin(koord, bes_chr[:, [:CHR_ID, :CHRNR]], on = :CHRNR)
 n_records = Dict{String, Int}() # to keep track of when records are filtered out!
 
 #### Data wrangling ####
@@ -160,7 +160,7 @@ seasons_to_exclude = ("winter_year1", "autumn_year2")
 climate = climate_all[filter(x -> !any(y -> endswith(string(x), y), seasons_to_exclude), keys(climate_all))]
 
 # Combine climate and herd data
-bes_lat_lon = DimVector(tuple.(beskoord.LON, beskoord.LAT), Dim{:CHR_ID}(beskoord.CHR_ID))
+bes_lat_lon = DimVector(tuple.(koord.LON, koord.LAT), Dim{:CHR_ID}(koord.CHR_ID))
 bes_lat_lon_included = bes_lat_lon[CHR_ID = At(chr_included)]
 besclimate = map(bes_lat_lon_included) do (x,y)
     src = climate[X = Near(x), Y = Near(y)]
@@ -226,7 +226,7 @@ end
 
 
 ## Export predictors
-predictors_with_lonlat = innerjoin(predictorsdf, unique(beskoord[!, [:CHR_ID, :LON, :LAT]]), on = :CHR_ID)
+predictors_with_lonlat = innerjoin(predictorsdf, koord, on = :CHR_ID)
 CSV.write(joinpath(datadir, "..", "predictors.csv"), predictors_with_lonlat)
 
 ## Write files for plotting
@@ -272,8 +272,7 @@ dk_grps.group .= 1:nrow(dk_grps)
 findfirst(x -> contains(x, "Frederikshavn"), dk_grps.name)
 
 # besætninger and their coordinates
-chrgeom = unique(beskoord[!, [:CHR_ID, :LAT, :LON]])
-filter!(r -> r.CHR_ID in chr_included, chrgeom)
+chrgeom = filter(r -> r.CHR_ID in chr_included, koord)
 chrgeom.geometry = tuple.(chrgeom.LON, chrgeom.LAT)
 
 # find municipality for each cohort

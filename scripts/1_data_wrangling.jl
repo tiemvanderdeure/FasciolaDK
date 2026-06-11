@@ -10,8 +10,6 @@ dyr, dyrtilbes, slagt, fund, beskart, bes_chr, besbrugsart, koord, udstationerin
 beskoord = innerjoin(koord, bes_chr, on = :CHRNR)
 n_records = Dict{String, Int}() # to keep track of when records are filtered out!
 
-dyr.male = .!iseven.(dyr.KONK_ID)
-
 #### Data wrangling ####
 
 ## Combine animals, slagt, and fund - including initial filtering
@@ -19,7 +17,7 @@ dyr.male = .!iseven.(dyr.KONK_ID)
 rename!(slagt, "DATO" => "SLAGTDATO")
 fund.value .= true
 fundwide = unstack(fund, :SLFUNDKODE, :value)
-slfundkoder = Symbol.([371, 374, 375, 377, 379, 381])
+slfundkoder = filter(!=(:SLAGTDATA_ID), Tables.columnnames(fundwide))
 
 dyr_slagt = leftjoin(innerjoin(dyr, slagt, on = :DYR_ID), fundwide, on = :SLAGTDATA_ID)
 for c in slfundkoder

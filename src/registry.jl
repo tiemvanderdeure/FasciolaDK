@@ -1,4 +1,4 @@
-function load_registry()
+function load_registry(datadir = datadir)
     dyr = CSV.read(joinpath(datadir, "dyr.csv"), DataFrame)
     dropmissing!(dyr, :FOEDSELSDATO) # just one row without FOEDSELSDATO
     dyrtilbes = CSV.read(joinpath(datadir, "dyrtilbes.csv"), DataFrame, types = Dict(:DATOFRA => Date, :DATOTIL => Date))
@@ -16,7 +16,7 @@ function load_registry()
     # drop all burgsart > 20? These are hobbydyr, avlsdyr, etc.
 
     # warns but seems to be okay?
-    koord = CSV.read(joinpath(datadir, "giskoord.csv"), DataFrame, decimal = ',', types = Dict(:LAT => Float64, :LON => Float64))
+    koord = CSV.read(joinpath(datadir, "giskoord.csv"), DataFrame)
     # A couple of missing lon-lat values - these have XKOOR and YKOOR of 0
     dropmissing!(koord)
 

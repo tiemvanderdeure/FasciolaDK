@@ -9,8 +9,7 @@ dkbdry <- inla.sp2segment(sf::st_as_sf(dk))
 
 data <- read.csv("/home/tvd/K/FasciolaDK/predictors.csv")
 data$øko = as.numeric(data$øko == "true")
-data$besid <- dense_rank(data$BES_ID)
-data$logsize <- log(data$bes_size)
+data$chrid <- dense_rank(data$CHR_ID)
 data$prevalence <- data$positive / data$count
 data$Intercept <- 1 # to avoid any shenanigans with intercepts
 
@@ -57,15 +56,15 @@ runinla <- function(x) inla(
 # normal variables - include or not
 random_vars <- c(
   øko = "øko", 
-  besid = 'f(besid, model = "iid", hyper = list(prec = list(prior = "pc.prec", param = c(1.0, 0.10))))',
+  chr = 'f(chrid, model = "iid", hyper = list(prec = list(prior = "pc.prec", param = c(1.0, 0.10))))',
   slagtid = 'f(slagteri_id, model = "iid")'
 )
 
 vars <- c("tavg", "ppt", "soil", "def")
-seasons <- c("spring_lag1", "summer_lag1", "autumn_lag1", "winter", "spring", "summer")
+seasons <- c("spring_year1", "summer_year1", "autumn_year1", "winter_year2", "spring_year2", "summer_year2")
 env_vars <- c(
   as.vector(outer(vars, seasons, function(x,y) paste(x,y,sep="_"))), 
-  "ollerenshaw", "ollerenshaw_lag1", "1"
+  "ollerenshaw_year1", "ollerenshaw_year2", "1"
 )
 
 # spacetime - multiple options
@@ -87,10 +86,8 @@ vars_spacetime <- c(
 binary_combos <- expand.grid(rep(list(c(FALSE, TRUE)), length(random_vars)))
 
 # Combine binary and multi-option combinations
-model_list <- data.frame(merge(binary_combos, names(vars_spacetime)))
-colnames(model_list) <- c(names(random_vars), "spacetime")
-
-model_list <- merge(model_list, env_vars)
+model_list <- merge(binary_combos, merge(env_vars, names(vars_spacetime)))
+colnames(model_list) <- c(names(random_vars), "y", "spacetime")
 
 # Generate formulas
 model_list$formula <- apply(model_list, 1, function(row) {
@@ -145,9 +142,9 @@ posteriors_summarized <- mapply(function(res, m){
   posterior_fixed_v <- mat_to_vect(posterior_fixed)
 
   # i.i.d. posteriors
-  besid_var <- if(m$besid) parse_precision(res, "besid") else c()
+  chrid_var <- if(m$chrid) parse_precision(res, "chrid") else c()
   slagtid_var <- if(m$slagtid) parse_precision(res, "slagteri_id") else c()
-  vars <- c(posterior_fixed_v, besid_var, slagtid_var)
+  vars <- c(posterior_fixed_v, chrid_var, slagtid_var)
 },
   model_results, 
   asplit(model_list, 1)
@@ -198,11 +195,11 @@ result_summary <- lapply(results, function(res) {
   posterior_fixed_v <- mat_to_vect(posterior_fixed)
 
   # i.i.d. random effects (all your candidate models include these)
-  besid_var <- parse_precision(res, "besid")
+  chrid_var <- parse_precision(res, "chrid")
   slagtid_var <- parse_precision(res, "slagteri_id")
 
   # combine into a single named numeric vector
-  c(posterior_fixed_v, besid_var, slagtid_var)
+  c(posterior_fixed_v, chrid_var, slagtid_var)
 }
 )
 results_df <- bind_rows(result_summary)
@@ -228,7 +225,7 @@ spacetime_formula_base <- as.formula(paste(
 
 optimal_model <- update(spacetime_formula_base, y ~ . + ppt_summer_lag1 + tavg_summer_lag1)
 
-# Run inla with the model with besid, øko and spatiotemporal effect
+# Run inla with the model with chrid, øko and spatiotemporal effect
 #spacetime_formula <- last(model_list$formula)
 res <- runinla(optimal_model)
 
@@ -280,3 +277,9 @@ year_posterior <- rbind(res_year$summary.fixed["year",], res_optimal_year$summar
 rownames(year_posterior) <- c("year_simple", "year_with_environment")
 
 write.csv(year_posterior, paste0("posteriors_year", Sys.Date(), ".csv"))
+
+post_year_samples <- inla.posterior.sample(nsamples, res_year)
+
+year_idx <- grep("year:1", rownames(post_year_samples[[1]]$latent))[1]
+year_est <- sapply(post_year_samples, function(x) x$latent[year_idx])
+print(paste0("likelihood effect of year is negative: ", mean(year_est <0)))

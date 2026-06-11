@@ -54,6 +54,13 @@ n_records["not_dairy_race"] = nrow(dyr_slagt_nodairyraces)
 # No dato til means that brugsart is still active
 besbrugsart.DATO_TIL .= Missings.replace(besbrugsart.DATOTIL, Date(2099))
 filter!(r -> r.BRUGSART_ID != 68, besbrugsart) # 68 = slagteri
+# Sometimes first start date is after besætning is in use - assume no changes until then by
+# setting the first DATOFRA to the earliest date in the dataset
+besbrugsart = DataFrames.combine(groupby(besbrugsart, :BES_ID)) do g
+    min_idx = argmin(g.DATOFRA)
+    g.DATOFRA[min_idx] = Date(1)
+    return g
+end
 
 # keep only the DYR_ID we filtered out before
 dyr_bes = dyrtilbes[in.(dyrtilbes.DYR_ID, Ref(Set(dyr_slagt_nodairyraces.DYR_ID))), :]
@@ -80,26 +87,31 @@ filter!(x -> x.til - x.fra > Day(10), dyr_bes_brugsart)
 dyr_bes_brugsart.framonth = yearmonth.(dyr_bes_brugsart.fra) 
 dyr_bes_brugsart.tilmonth = yearmonth.(dyr_bes_brugsart.til)
 
-# Group by animal, and select only certain animals
-dyr_bes_brugsart_grp = groupby(dyr_bes_brugsart, :DYR_ID)
-# Define which animals to include based on the herds they have belonged to history
-# The rationale here is that we want to know where an animal spent the 2nd summer of its life.
+dyr_bes_brugsart_chr = innerjoin(dyr_bes_brugsart, bes_chr[!, [:BES_ID, :CHR_ID]], on = :BES_ID)
+
+#### Simplify and filter - define herd and øko for animals we want to include
+dyr_bes_brugsart_grp = groupby(dyr_bes_brugsart_chr, :DYR_ID)
 animals_sel = DataFrames.combine(dyr_bes_brugsart_grp) do g
-        yr = year(findmin(g.fra)[1]) + 1 # the year where we assume transmission _might_ take place
-    # has this animal been in this herd the entire transmission season?
-    idx = findfirst(eachrow(g)) do r
-        r.framonth <= (yr, 3) && r.tilmonth >= (yr, 8)
-    end
-    include = !isnothing(idx) &&
-        !(any(g.mælk)) && # animals that have been in a dairy herd at some point have *much* lower prevalence
-        !any(>(20), g.BRUGSART_ID) # all of these are tricky ones like hobbydyr, naturpleje, etc.
-    if include
-        return (øko = g.øko[idx], BES_ID = g.BES_ID[idx], yr)
+    yr = year(findmin(g.fra)[1]) + 1
+    idx = if nrow(g) == 1 # if only a single herd comes up, take that one
+        [1] # avoid if statements because the data sometimes isn't correct and not a single herd might come up
+        else
+            # if it has been in multiple herds, find the ones from beginning of first summer to end of second summer
+            findall(eachrow(g)) do r
+                r.tilmonth >= (yr-1, 6) && r.framonth <= (yr, 9)
+            end
+        end
+    # has this animal been in multiple herds between summer of yr-1 and summer of yr?
+    included = allequal(g.CHR_ID[idx]) && allequal(g.øko[idx]) &&
+        !any(g.mælk) #&& # animals that have been in a dairy herd at some point have *much* lower prevalence
+        all(<(20), g.BRUGSART_ID[idx]) # all of these are tricky ones like hobbydyr, naturpleje, etc.
+    return if included
+        (øko = g.øko[first(idx)], CHR_ID = g.CHR_ID[first(idx)], yr)
     else
-        return (øko = false, BES_ID = 0, yr)
+        (øko = false, CHR_ID = 0, yr)
     end
 end
-filter!(x -> !iszero(x.BES_ID), animals_sel)
+filter!(x -> !iszero(x.CHR_ID), animals_sel)
 n_records["registered_as_beef"] = nrow(animals_sel)
 
 # Filter out animals that have been sent to a different herd during the relevant time
@@ -123,17 +135,17 @@ n_slagteri = maximum(slagtbes_to_slagteri_id.slagteri_id) # 10
 animals_w_slagteri = innerjoin(animals_w_data, slagtbes_to_slagteri_id, on = :SLAGTBES_ID)
 
 # finally filter out any bes that have very few animals - to reduce the complexity of the problem
-animals_filtered2 = combine(identity, filter(x -> nrow(x) >= 10, groupby(animals_w_slagteri, :BES_ID)))
+animals_filtered2 = combine(identity, filter(x -> nrow(x) > 5, groupby(animals_w_slagteri, :CHR_ID)))
 
 ## Now that we have all the animals we want, group them into cohorts based on bes and yr
-cohorts_grps = groupby(animals_filtered2, [:BES_ID, :yr, :slagteri_id])
+cohorts_grps = groupby(animals_filtered2, [:CHR_ID, :yr, :slagteri_id])
 cohorts = combine(cohorts_grps, 
     :flukes => sum => :positive, 
     :liverdisease => sum => :positive_other, 
     :øko => first => :øko,
     nrow => :count
 )
-bes_included = unique(cohorts.BES_ID)
+chr_included = unique(cohorts.CHR_ID)
 
 ## Read in climate data
 climateobs = get_terraclimate((:tavg, :ppt, :def, :soil))
@@ -142,29 +154,29 @@ ollerenshaw = FasciolaDK.get_ollerenshaw()
 climate_expanded = mapreduce(merge, layers(climateobs)) do x
     RasterStack(x; layersfrom = :season, name = string(Rasters.name(x)) .* "_" .* ["winter", "spring", "summer", "autumn"])
 end
-climate_nolag = merge(climate_expanded, (; ollerenshaw))
+climate_yr1 = merge(climate_expanded, (; ollerenshaw))
 
-climate_all = FasciolaDK.add_lagged_vars(climate_nolag)
+climate_all = FasciolaDK.add_lagged_vars(climate_yr1)
 
-seasons_to_exclude = ("winter_lag1", "autumn")
+seasons_to_exclude = ("winter_year1", "autumn_year2")
 climate = climate_all[filter(x -> !any(y -> endswith(string(x), y), seasons_to_exclude), keys(climate_all))]
 
-# Combine climate and 
-bes_lat_lon = DimVector(tuple.(beskoord.LON, beskoord.LAT), Dim{:BES_ID}(beskoord.BES_ID))
-bes_lat_lon_included = bes_lat_lon[BES_ID = At(bes_included)]
+# Combine climate and herd data
+bes_lat_lon = DimVector(tuple.(beskoord.LON, beskoord.LAT), Dim{:CHR_ID}(beskoord.CHR_ID))
+bes_lat_lon_included = bes_lat_lon[CHR_ID = At(chr_included)]
 besclimate = map(bes_lat_lon_included) do (x,y)
     src = climate[X = Near(x), Y = Near(y)]
 end |> RasterSeries |> Rasters.combine
 
-idx_no_climatedata = findall(x -> any(ismissing, x), eachslice(first(layers(besclimate)); dims = :BES_ID))
-bes_no_climatedata = lookup(dims(besclimate, :BES_ID))[idx_no_climatedata]
+idx_no_climatedata = findall(x -> any(ismissing, x), eachslice(first(layers(besclimate)); dims = :CHR_ID))
+bes_no_climatedata = lookup(dims(besclimate, :CHR_ID))[idx_no_climatedata]
 cohorts_w_climatedata = filter(cohorts) do r
-    !(r.BES_ID in bes_no_climatedata)
+    !(r.CHR_ID in bes_no_climatedata)
 end
 
 # put everything into a single DF
 predictorsdf = map(eachrow(cohorts_w_climatedata)) do r
-   merge(besclimate[year = At(r.yr), BES_ID = At(r.BES_ID)], r)
+   merge(besclimate[year = At(r.yr), CHR_ID = At(r.CHR_ID)], r)
 end |> DataFrame 
 
 # Normalize all the data columns in predictorsdf
@@ -187,7 +199,7 @@ in_text_numbers = [
     "Number of animals (filtered): $(sum(predictorsdf.count))",
     "Pct animals included: $(topct(sum(predictorsdf.count) / nrow(slagt)))",
     "Number of cohorts: $(nrow(predictorsdf))",
-    "Number of herds: $(length(unique(predictorsdf.BES_ID)))", 
+    "Number of owners: $(length(unique(predictorsdf.CHR_ID)))", 
     "Fluke pct all: $(topct(mean(dyr_slagt.flukes)))",
     "Fluke pct included: $(topct(sum(predictorsdf.positive) / sum(predictorsdf.count)))%",
     "Other liver disease all: $(topct(mean(dyr_slagt.liverdisease)))",
@@ -216,7 +228,7 @@ end
 
 
 ## Export predictors
-predictors_with_lonlat = innerjoin(predictorsdf, beskoord[!, [:BES_ID, :LON, :LAT]], on = :BES_ID)
+predictors_with_lonlat = innerjoin(predictorsdf, unique(beskoord[!, [:CHR_ID, :LON, :LAT]]), on = :CHR_ID)
 CSV.write(joinpath(datadir, "..", "predictors.csv"), predictors_with_lonlat)
 
 ## Write files for plotting
@@ -262,14 +274,14 @@ dk_grps.group .= 1:nrow(dk_grps)
 findfirst(x -> contains(x, "Frederikshavn"), dk_grps.name)
 
 # besætninger and their coordinates
-besgeom = beskoord[!, [:BES_ID, :LAT, :LON]]
-filter!(r -> r.BES_ID in bes_included, besgeom)
-besgeom.geometry = tuple.(besgeom.LON, besgeom.LAT)
+chrgeom = unique(beskoord[!, [:CHR_ID, :LAT, :LON]])
+filter!(r -> r.CHR_ID in chr_included, chrgeom)
+chrgeom.geometry = tuple.(chrgeom.LON, chrgeom.LAT)
 
 # find municipality for each cohort
 find_first_munic(co; dk_munic = dk_munic) = findfirst(g -> GO.within(co, g), dk_munic.geometry)
-besgeom.group = find_first_munic.(besgeom.geometry; dk_munic = dk_grps)
-animals_koords = innerjoin(animals_filtered2, besgeom, on = :BES_ID)
+chrgeom.group = find_first_munic.(chrgeom.geometry; dk_munic = dk_grps)
+animals_koords = innerjoin(animals_filtered2, chrgeom, on = :CHR_ID)
 # calculate stats for each municipality
 municipality_stats = combine(groupby(animals_koords, :group)) do g
     n = nrow(g)

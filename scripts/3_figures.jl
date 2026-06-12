@@ -191,7 +191,7 @@ climate = get_terraclimate((:tavg, :ppt))
 climatevars = climate[season=3, year=1:End()-1]
 env_vars = RasterStack(
     values(set(climatevars; year=dims(climatevars, :year) .+ 1)); # fix year dimension
-    name=Symbol.(string.(keys(climatevars)) .* "_summer_lag1") # fix names
+    name=Symbol.(string.(keys(climatevars)) .* "_summer_year1") # fix names
 )
 
 # normalization - saved from 1_data_wrangling.jl
@@ -200,11 +200,11 @@ env_vars_norm = maplayers(env_vars, normalization) do v, n
     (v .- n[1]) ./ n[2]
 end
 
-posterior_env_effect = CSV.read("posterior_effects_envvars_samples2026-03-11.csv", Tables.rowtable)
+posterior_env_effect = CSV.read("posterior_effects_envvars_samples2026-06-13.csv", Tables.rowtable)
 
 env_effects = map(posterior_env_effect) do r
     #mapreduce(+, r[keys(env_vars_norm)], layers(env_vars_norm)) do r, e
-    mapreduce(+, r[(:tavg_tm1_summer, :ppt_tm1_summer)], layers(env_vars_norm)) do r, e
+    mapreduce(+, r[(:tavg_summer_year1, :ppt_summer_year1)], layers(env_vars_norm)) do r, e
         r .* e
     end
 end
@@ -326,14 +326,14 @@ add_rank(x::AbstractVector; rev) =
 function pseudo_formula(r)
     vars = String[]
     r.øko && push!(vars, "organic")
-    r.besid && push!(vars, "herd")
+    r.chr && push!(vars, "chr")
     r.slagtid && push!(vars, "abattoir")
     r.y != "1" && push!(vars, r.y)
     isempty(vars) ? "null" : join(vars, " + ")
 end
 
-posteriors_df = CSV.read("model_runs_posteriors2026-03-12.csv", DataFrame)
-sort!(posteriors_df, :waic, rev=false)
+posteriors_df = CSV.read("model_runs_posteriors2026-06-13.csv", DataFrame)
+sort!(posteriors_df, :mlik, rev=true)
 
 posteriors_df_formatted = transform(
     posteriors_df,
@@ -341,7 +341,7 @@ posteriors_df_formatted = transform(
         Symbol.(var .* "_" .* ["mean", "quant0.025", "quant0.975"])
         =>
             ByRow(to_95_interval) => Symbol("$(var)_formatted")
-        for var in ("Intercept", "øko", "besid", "slagteriid", "envvar")
+        for var in ("Intercept", "øko", "chr", "slagteriid", "envvar")
     )...,
 )
 
@@ -355,7 +355,7 @@ posteriors_df_formatted = unique(posteriors_df_formatted, [:formula, :spacetime]
 posteriors_df_formatted.include .= false
 posteriors_df_formatted.include[1:10] .= true
 posteriors_df_formatted[
-    findfirst(x -> x.formula == "organic + herd + abattoir" && x.spacetime == "spacetime", eachrow(posteriors_df_formatted)),
+    findfirst(x -> x.formula == "organic + chr + abattoir" && x.spacetime == "spacetime", eachrow(posteriors_df_formatted)),
     :include] = true
 
 for sp in unique(posteriors_df_formatted.spacetime)
@@ -363,7 +363,7 @@ for sp in unique(posteriors_df_formatted.spacetime)
 end
 posteriors_df_formatted[posteriors_df_formatted.formula.=="null", :include] .= true
 
-labels = Cell.(["Formula", "WAIC (rank)", "m. lik. (rank)", "DIC (rank)", "slope (95% CI)"]; bold=true, border_bottom=true)
+labels = Cell.(["Formula", "m. lik. (rank)", "DIC (rank)", "WAIC (rank)", "slope (95% CI)"]; bold=true, border_bottom=true)
 
 grps = groupby(posteriors_df_formatted, :spacetime)
 cells = mapreduce(vcat, unique(posteriors_df_formatted.spacetime)) do sp
@@ -371,9 +371,9 @@ cells = mapreduce(vcat, unique(posteriors_df_formatted.spacetime)) do sp
     df = grp[grp.include, :]
     datacells = hcat(
         Cell.(df.formula),
-        Cell.(df.waic_formatted),
         Cell.(df.mlik_formatted),
         Cell.(df.dic_formatted),
+        Cell.(df.waic_formatted),
         Cell.(df.envvar_formatted)
     )
     header = repeat(
@@ -399,7 +399,7 @@ table2 = Table(vcat(headercells', datacells))
 
 #### Models with 2 variables:
 # read the candidate models CSV
-cand_df = CSV.read("candidate_models_two_vars_2026-04-29.csv", DataFrame)
+cand_df = CSV.read("candidate_models_two_vars_2026-06-13.csv", DataFrame)
 
 # add formatted rank columns
 cand_df.mlik_formatted = add_rank(cand_df.mlik; rev=true)
@@ -417,20 +417,19 @@ cand_df_formatted = transform(
 )
 cand_df_formatted.slope = cand_df_formatted.envvar1_formatted .* " + " .* cand_df_formatted.envvar2_formatted
 
-sort!(cand_df_formatted, :waic, rev=false)
+sort!(cand_df_formatted, :mlik, rev=true)
 
 datacells = hcat(
     Cell.(cand_df_formatted.formula),
-    Cell.(cand_df_formatted.waic_formatted),
     Cell.(cand_df_formatted.mlik_formatted),
     Cell.(cand_df_formatted.dic_formatted),
+    Cell.(cand_df_formatted.waic_formatted),
     Cell.(cand_df_formatted.slope)
 )
 
 labels
 
 table_two_vars = Table(vcat(labels', datacells))
-
 
 doc = W.Document(
     W.Body([

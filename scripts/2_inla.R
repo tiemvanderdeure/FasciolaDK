@@ -9,7 +9,7 @@ dkbdry <- inla.sp2segment(sf::st_as_sf(dk))
 
 data <- read.csv("/home/tvd/K/FasciolaDK/predictors.csv")
 data$øko = as.numeric(data$øko == "true")
-data$chrid <- dense_rank(data$CHR_ID)
+data$chr <- dense_rank(data$CHR_ID)
 data$prevalence <- data$positive / data$count
 data$Intercept <- 1 # to avoid any shenanigans with intercepts
 
@@ -49,14 +49,14 @@ runinla <- function(x) inla(
   Ntrials = n,
   control.predictor = list(A = inla.stack.A(stack), compute = TRUE),
   control.compute = list(config = TRUE, dic = TRUE, waic = TRUE),
-  control.inla = list(strategy = "adaptive"), # for speed up
+  control.inla = list(strategy = "simplified.laplace"),
 ) 
 
 ####### Test many models with many possible variable combinations
 # normal variables - include or not
 random_vars <- c(
   øko = "øko", 
-  chr = 'f(chrid, model = "iid", hyper = list(prec = list(prior = "pc.prec", param = c(1.0, 0.10))))',
+  chr = 'f(chr, model = "iid")',
   slagtid = 'f(slagteri_id, model = "iid")'
 )
 
@@ -77,7 +77,7 @@ vars_spacetime <- c(
     model = "ar1", 
     hyper = list(rho = list(
         prior = "pc.cor1", 
-        param = c(0.8, 0.8)
+        param = c(0.0, 0.8)
     ))
   ))' # prior shrinks towards bigger Rho = smoother over time
 )
@@ -105,7 +105,7 @@ model_list$formula <- apply(model_list, 1, function(row) {
 })
 
 # Actually run all models
-model_results <- sapply(model_list$formula, runinla)
+model_results <- lapply(model_list$formula, runinla)
 # Get estimates for goodness of fit
 model_list$mlik <- sapply(model_results, function(x) x$mlik[2])
 model_list$waic <- sapply(model_results, function(x) x$waic$waic)
@@ -142,9 +142,9 @@ posteriors_summarized <- mapply(function(res, m){
   posterior_fixed_v <- mat_to_vect(posterior_fixed)
 
   # i.i.d. posteriors
-  chrid_var <- if(m$chrid) parse_precision(res, "chrid") else c()
+  chr_var <- if(m$chr) parse_precision(res, "chr") else c()
   slagtid_var <- if(m$slagtid) parse_precision(res, "slagteri_id") else c()
-  vars <- c(posterior_fixed_v, chrid_var, slagtid_var)
+  vars <- c(posterior_fixed_v, chr_var, slagtid_var)
 },
   model_results, 
   asplit(model_list, 1)
@@ -195,16 +195,15 @@ result_summary <- lapply(results, function(res) {
   posterior_fixed_v <- mat_to_vect(posterior_fixed)
 
   # i.i.d. random effects (all your candidate models include these)
-  chrid_var <- parse_precision(res, "chrid")
+  chr_var <- parse_precision(res, "chr")
   slagtid_var <- parse_precision(res, "slagteri_id")
 
   # combine into a single named numeric vector
-  c(posterior_fixed_v, chrid_var, slagtid_var)
+  c(posterior_fixed_v, chr_var, slagtid_var)
 }
 )
 results_df <- bind_rows(result_summary)
 results_df$formula <- candidate_combos
-
 
 results_df$mlik <- sapply(results, function(x) x$mlik[2])
 results_df$waic <- sapply(results, function(x) x$waic$waic)
@@ -225,7 +224,7 @@ spacetime_formula_base <- as.formula(paste(
 
 optimal_model <- update(spacetime_formula_base, y ~ . + ppt_summer_lag1 + tavg_summer_lag1)
 
-# Run inla with the model with chrid, øko and spatiotemporal effect
+# Run inla with the model with chr, øko and spatiotemporal effect
 #spacetime_formula <- last(model_list$formula)
 res <- runinla(optimal_model)
 

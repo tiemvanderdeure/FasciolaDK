@@ -7,7 +7,7 @@ years = 2010:2023
 # FasciolaDK.download_terraclimate((:pet, :tmin, :tmax, :ppt, :def, :soil), "data/terraclimate_dk.nc"; silent = false)
 
 dyr, dyrtilbes, slagt, fund, beskart, bes_chr, besbrugsart, koord, udstationeringer = load_registry()
-koord = innerjoin(koord, bes_chr[:, [:CHR_ID, :CHRNR]], on = :CHRNR)
+koord = innerjoin(koord, unique(bes_chr[:, [:CHR_ID, :CHRNR]]), on = :CHRNR)
 n_records = Dict{String, Int}() # to keep track of when records are filtered out!
 
 #### Data wrangling ####
@@ -223,7 +223,6 @@ open("records_filtering_data.tex", "w") do f
         write(f, "\\newcommand{\\$(replace(key, "_" => ""))}{$value}\n")
     end
 end
-
 
 ## Export predictors
 predictors_with_lonlat = innerjoin(predictorsdf, koord, on = :CHR_ID)

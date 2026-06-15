@@ -167,8 +167,8 @@ write.csv(
 
 # Identified by earlier exploratory analysis as best candidates 
 candidate_vars <- c(
-  "ppt_summer_lag1", "tavg_summer_lag1", "soil_summer_lag1", 
-  "soil_autumn_lag1", "def_spring_lag1") 
+  "ppt_summer_year1", "tavg_summer_year1", "soil_summer_year1", 
+  "soil_autumn_year1", "def_spring_year1") 
   
 # all combos of size = 2
 candidate_combos <- apply(combn(candidate_vars, 2), 2, paste, collapse = " + ")
@@ -222,7 +222,7 @@ write.csv(results_df, paste0("candidate_models_two_vars_", Sys.Date(), ".csv"), 
 spacetime_formula_base <- as.formula(paste(
   "y ~ ", paste(random_vars, collapse = " + "), "-1 + Intercept + ", vars_spacetime["spacetime"]))
 
-optimal_model <- update(spacetime_formula_base, y ~ . + ppt_summer_lag1 + tavg_summer_lag1)
+optimal_model <- update(spacetime_formula_base, y ~ . + ppt_summer_year1 + tavg_summer_year1)
 
 # Run inla with the model with chr, øko and spatiotemporal effect
 #spacetime_formula <- last(model_list$formula)
@@ -257,7 +257,7 @@ for (i in 1:nsamples){
 }
 
 ## Write estimates for the effects of the two environmental variables in each sample
-vars_to_export <- c("øko", "Intercept", "ppt_summer_lag1", "tavg_summer_lag1")
+vars_to_export <- c("øko", "Intercept", "ppt_summer_year1", "tavg_summer_year1")
 effects <- lapply(samples, function(s) s$latent[paste0(vars_to_export, ":1"),])
 effects_df <- data.frame(do.call(rbind, effects))
 colnames(effects_df) <- vars_to_export

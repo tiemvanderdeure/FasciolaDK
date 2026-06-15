@@ -2,7 +2,8 @@
 # Investigate if prevalence of liver fluke is within each cohort is
 # correlated with the prevalence of other liver diseases.
 
-using Turing, Mooncake
+using Turing, Mooncake, CSV, StatsBase, DataFrames
+import FasciolaDK: datadir
 
 @model function binomial_correlation_lkj(
     x_a, x_b, n, slagteri_id, besid;
@@ -42,9 +43,9 @@ end
 
 # read besid, slagteri_id, count and positive columns
 cohorts = CSV.read(joinpath(datadir, "..", "predictors.csv"), DataFrame; 
-    select = [:BES_ID, :slagteri_id, :count, :positive, :positive_other, :yr])
+    select = [:CHR_ID, :slagteri_id, :count, :positive, :positive_other, :yr])
 
-cohorts.besid = StatsBase.denserank(cohorts.BES_ID)
+cohorts.besid = StatsBase.denserank(cohorts.CHR_ID)
 cohorts.slagteri_id = StatsBase.denserank(cohorts.slagteri_id)
 
 # group by slagteri_id and besid to get unique cohorts
@@ -53,16 +54,6 @@ cohorts = combine(groupby(cohorts, [:slagteri_id, :besid]),
     :positive => sum => :positive,
     :positive_other => sum => :positive_other
 )
-
-# group by slagteri_id and besid to get unique cohorts
-by_slagter = combine(groupby(cohorts, [:slagteri_id]), 
-    :count => sum => :count,
-    :positive => sum => :positive,
-    :positive_other => sum => :positive_other,
-    :yr => extrema => :yr_range
-)
-by_slagter.pct_positive_other = by_slagter.positive_other ./ by_slagter.count
-by_slagter.pct_positive = by_slagter.positive ./ by_slagter.count
 
 liverdisease_cor_model = binomial_correlation_lkj(
     cohorts.positive, cohorts.positive_other, cohorts.count, 
@@ -101,20 +92,3 @@ open("in_text_numbers.txt", "a") do io
     println(io, @sprintf "Liver disease correlation slagteri: %.2f (95%% CI: %.2f, %.2f)" mean(corslagtcoef) quantile(corslagtcoef, [0.05, 0.95])...)
 
 end
-
-
-#=
-## Test this model
-Sigma = [1 -0.5; -0.5 1]
-n = 500
-
-logitab = rand(filldist(MvNormal(Sigma), n))
-ns = rand(50:100, n)
-x_a = rand.(BinomialLogit.(ns, logitab[1,:] .* 2))
-x_b = rand.(BinomialLogit.(ns, logitab[2,:]))
-
-testmod = binomial_correlation_lkj(x_a, x_b, ns)
-testchn = sample(testmod, NUTS(; adtype = AutoMooncake(nothing)), 1000)
-
-testchn[Symbol("L.L[2, 1]")] |> mean
-=#

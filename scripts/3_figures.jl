@@ -200,7 +200,7 @@ env_vars_norm = maplayers(env_vars, normalization) do v, n
     (v .- n[1]) ./ n[2]
 end
 
-posterior_env_effect = CSV.read("posterior_effects_envvars_samples2026-06-13.csv", Tables.rowtable)
+posterior_env_effect = CSV.read("posterior_effects_envvars_samples2026-06-15.csv", Tables.rowtable)
 
 env_effects = map(posterior_env_effect) do r
     #mapreduce(+, r[keys(env_vars_norm)], layers(env_vars_norm)) do r, e
@@ -399,7 +399,7 @@ table2 = Table(vcat(headercells', datacells))
 
 #### Models with 2 variables:
 # read the candidate models CSV
-cand_df = CSV.read("candidate_models_two_vars_2026-06-13.csv", DataFrame)
+cand_df = CSV.read("candidate_models_two_vars_2026-06-15.csv", DataFrame)
 
 # add formatted rank columns
 cand_df.mlik_formatted = add_rank(cand_df.mlik; rev=true)

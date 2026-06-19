@@ -105,7 +105,7 @@ fig1 = let
     fig
 end
 
-save("images/figure1.png", fig1; pt_per_unit=10)
+save("images/figure1.eps", fig1)
 
 #### Figure 2: Prevalence of liver disease in Danish cattle
 annual_stats = CSV.read(joinpath("data", "fig_1_annual_stats.csv"), DataFrame)
@@ -175,7 +175,7 @@ fig2 = let years = 2010:2023
     fig
 end;
 
-save("images/figure2.png", fig2; pt_per_unit=10)
+save("images/figure2.png", fig2; pt_per_unit=20)
 
 ##### Posterior estimates of the INLA model for prevalence over space and time
 import StatsFuns: logistic
@@ -266,7 +266,7 @@ fig3, figs1, figs2 = map((posterior_estimate_mean, posterior_estimate_025, poste
     end
 end
 
-save("images/figure3.png", fig3; pt_per_unit=10)
+save("images/figure3.eps", fig3)
 save("images/figures1_prevalence_lower.png", figs1; pt_per_unit=10)
 save("images/figures2_prevalence_upper.png", figs2; pt_per_unit=10)
 

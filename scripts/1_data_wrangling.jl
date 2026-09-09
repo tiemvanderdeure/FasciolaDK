@@ -121,8 +121,12 @@ n_records["not_grazing_elsewhere"] = nrow(animals_sel)
 animals_w_data = innerjoin(animals_sel, dyr_slagt_nodairyraces, on = :DYR_ID)
 
 ### Now add a slagteri id to each animal corresponding to the slaughterhouse they were slaughtered at
-slagtbes_count = StatsBase.countmap(dyr_slagt.SLAGTBES_ID)
-slagtbes_ordered = sort(collect(slagtbes_count), by = last, rev = true)
+slagtbes_count = DataFrames.combine(groupby(dyr_slagt, :SLAGTBES_ID),
+    nrow => :n, :flukes => count, :liverdisease => count)
+# filter out any slaughterhouses where 1000+ animals where slaughtered but not a single liver diagnosis
+# was made
+filter!(x -> !(x.n > 1000 && iszero(x.flukes_count) && iszero(x.liverdisease_count)), slagtbes_count)
+slagtbes_ordered = slagtbes_count.SLAGTBES_ID[sortperm(slagtbes_count.n)]
 # Any butcheries over 100 000 animals slaughtered get their own ID 
 slagtbes_to_slagteri_id = DataFrame(
     SLAGTBES_ID = first.(slagtbes_ordered), 
@@ -131,6 +135,8 @@ slagtbes_to_slagteri_id = DataFrame(
 n_slagteri = maximum(slagtbes_to_slagteri_id.slagteri_id) # 10
 
 animals_w_slagteri = innerjoin(animals_w_data, slagtbes_to_slagteri_id, on = :SLAGTBES_ID)
+
+n_records["slagteri_reports_disease"] = nrow(animals_w_slagteri) 
 
 # finally filter out any bes that have very few animals - to reduce the complexity of the problem
 animals_filtered2 = combine(identity, filter(x -> nrow(x) > 5, groupby(animals_w_slagteri, :CHR_ID)))
@@ -215,7 +221,8 @@ n_records["excluded_birth_slaughter_dates"] = n_records["all_animals"] - n_recor
 n_records["excluded_dairy_races"] = n_records["age_range"] - n_records["not_dairy_race"]
 n_records["excluded_non_beef_herds"] = n_records["not_dairy_race"] - n_records["registered_as_beef"]
 n_records["excluded_grazing_elsewhere"] = n_records["registered_as_beef"] - n_records["not_grazing_elsewhere"]
-n_records["excluded_bes_under_ten_animals"] = n_records["not_grazing_elsewhere"] - n_records["included"]
+n_records["excluded_slagteri_not_reporting"] = n_records["not_grazing_elsewhere"] - n_records["slagteri_reports_disease"]
+n_records["excluded_bes_under_ten_animals"] = n_records["slagteri_reports_disease"] - n_records["included"]
 
 open("records_filtering_data.tex", "w") do f
     for (key, value) in n_records
@@ -231,7 +238,8 @@ CSV.write(joinpath(datadir, "..", "predictors.csv"), predictors_with_lonlat)
 ## Write files for plotting
 import GADM, GeometryBasics, GeoInterface as GI, GeometryOps as GO
 ## Figure 1 - data over time
-all_animals = dyr_slagt[:, [:SLAGTDATO, :liverdisease, :flukes]]
+dyr_slagt_included = innerjoin(slagtbes_count, dyr_slagt, on = :SLAGTBES_ID) # filter out abattoirs that do not report disease
+all_animals = dyr_slagt_included[:, [:SLAGTDATO, :liverdisease, :flukes]]
 all_animals.yr = year.(all_animals.SLAGTDATO .- Month(3))
 
 all_animals_yearly, selected_animals_yearly = map((all_animals, animals_filtered2)) do d
@@ -295,6 +303,4 @@ for c in [:n, :liver, :flukes]
     municipality_stats[!, c] .= Missings.replace(municipality_stats[!, c], 0)
 end
 CSV.write(joinpath("data", "fig_1_municipality_stats.csv"), municipality_stats)
-
-
 

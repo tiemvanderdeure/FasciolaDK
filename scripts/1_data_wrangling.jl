@@ -122,18 +122,11 @@ animals_w_data = innerjoin(animals_sel, dyr_slagt_nodairyraces, on = :DYR_ID)
 
 ### Now add a slagteri id to each animal corresponding to the slaughterhouse they were slaughtered at
 slagtbes_count = StatsBase.countmap(dyr_slagt.SLAGTBES_ID)
-slagtbes_ordered = sort(collect(slagtbes_count), by = last, rev = true)
-# Any butcheries over 100 000 animals slaughtered get their own ID 
-slagtbes_to_slagteri_id = DataFrame(
-    SLAGTBES_ID = first.(slagtbes_ordered), 
-    slagteri_id = ifelse.(last.(slagtbes_ordered) .> 100_000, 1:length(slagtbes_ordered), 0)
-)
-n_slagteri = maximum(slagtbes_to_slagteri_id.slagteri_id) # 10
-
-animals_w_slagteri = innerjoin(animals_w_data, slagtbes_to_slagteri_id, on = :SLAGTBES_ID)
+slagtbes_ordered = sort(collect(slagtbes_count), by = last, rev = true) .|> first
+animals_w_data.slagteri_id = identity.(indexin(animals_w_data.SLAGTBES_ID, slagtbes_ordered))
 
 # finally filter out any bes that have very few animals - to reduce the complexity of the problem
-animals_filtered2 = combine(identity, filter(x -> nrow(x) > 5, groupby(animals_w_slagteri, :CHR_ID)))
+animals_filtered2 = combine(identity, filter(x -> nrow(x) > 5, groupby(animals_w_data, :CHR_ID)))
 
 ## Now that we have all the animals we want, group them into cohorts based on bes and yr
 cohorts_grps = groupby(animals_filtered2, [:CHR_ID, :yr, :slagteri_id])

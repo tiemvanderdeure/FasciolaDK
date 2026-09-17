@@ -53,18 +53,10 @@ function process_terraclimate(climateraw)
         f = Rasters.name(l) === :ppt ? sum : mean
         dropdims(f(l; dims = :month); dims = :month)
     end
-#=
-    climate_tm1_quarterly = set(climate_quarterly[year = 1:End()-1], year = Dim{:year}(2010:2023))
-    climate_tm1_quarterly_rn = RasterStack(NamedTuple(Symbol.(string.(keys(climate_quarterly)) .* "_tm1") .=> values(climate_tm1_quarterly)))
-
-    climate_quarterly_tm0 = climate_quarterly[year = 2:End()]
-
-    return merge(climate_quarterly_tm0, climate_tm1_quarterly_rn)
-    =#
 end
 
 function add_lagged_vars(climate)
-    climate_tm1_quarterly = set(climate[year = 1:End()-1], year = Dim{:year}(val(lookup(climate, :year))[2:end]))
+    climate_tm1_quarterly = set(climate[year = 1:End()-1], :year => val(lookup(climate, :year))[2:end])
     climate_tm1_quarterly_yr1 = RasterStack(NamedTuple(
         Symbol(string(k) * "_year1") => climate_tm1_quarterly[k] for k in keys(climate)))
     climate_quarterly_yr2 = RasterStack(NamedTuple(Symbol(string(k) * "_year2") => climate[k] for k in keys(climate)))[year = 2:End()]
@@ -123,7 +115,7 @@ using Rasters.Lookups, Dates
 _plus(x::D,y::D) where D <: Rasters.Dimension{<:Real} = D(x.val + y.val)
 function _get_prec_days(force = false)
     climatevars = get_terraclimate_raw((:tavg,))
-    climatevars2 = set(set(climatevars, Ti => Intervals(Start())), Ti => Regular(Month(1)))
+    climatevars2 = set(climatevars, Ti => Intervals(Start())), Ti => Regular(Month(1))
 
     filepath = "data/monthly_prec_days.nc"
 

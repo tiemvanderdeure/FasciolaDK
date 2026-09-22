@@ -336,7 +336,7 @@ data_vars = merge(env_vars_norm,
     RasterStack((; year = DimArray(1:14, (year_dim,)), Intercept = DimArray(fill(1,), ()))))
 
 # Read in fixed effects, def_summer_year1+year+intercept
-posterior_env_effect = CSV.read("posterior_effect_def_year_2026-09-22.csv", Tables.columntable)
+posterior_env_effect = CSV.read("posterior_effect_def_year_$output_date.csv", Tables.columntable)
 posterior_effect_ds = DimStack(posterior_env_effect, (:draw,))
 posterior_effects_spatial = maplayers(data_vars, posterior_effect_ds[keys(data_vars)]) do r, e
     @d r .* e
@@ -515,64 +515,14 @@ end
 # the "main model"
 post_slagteri = CSV.read("slagteri_posterior.csv", DataFrame)
 post_slagteri.formatted = to_95_interval.(post_slagteri.mean, post_slagteri.var"0.025quant", post_slagteri.var"0.975quant")
-post_slagteri.label = ["Others"; string.('A':('A'+9))]
-post_slagteri = post_slagteri[[2:end; 1], :]
-headercells = Cell.(["Abattoir", "Log odds ratio (95% CI)"]; bold=true, border_bottom=true)
+post_slagteri.label = string.(post_slagteri.ID)
+headercells = Cell.(["Abattoir ID", "Log odds ratio (95% CI)"]; bold=true, border_bottom=true)
 datacells = hcat(Cell.(post_slagteri.label), Cell.(post_slagteri.formatted))
 table2 = Table(vcat(headercells', datacells))
+open(joinpath("images", "posterior_abattoir_random_effects.tex"), "w") do io
+    show(io, MIME"text/latex"(), table2)
+end
 
-#### Models with 2 variables:
-# read the candidate models CSV
-cand_df = CSV.read("candidate_models_two_vars_2026-06-15.csv", DataFrame)
-
-# add formatted rank columns
-cand_df.mlik_formatted = add_rank(cand_df.mlik; rev=true)
-cand_df.waic_formatted = add_rank(cand_df.waic; rev=false)
-cand_df.dic_formatted = add_rank(cand_df.dic; rev=false)
-
-cand_df_formatted = transform(
-    cand_df,
-    (
-        Symbol.(var .* "_" .* ["mean", "quant0.025", "quant0.975"])
-        =>
-            ByRow(to_95_interval) => Symbol("$(var)_formatted")
-        for var in ("envvar1", "envvar2")
-    )...,
-)
-cand_df_formatted.slope = cand_df_formatted.envvar1_formatted .* " + " .* cand_df_formatted.envvar2_formatted
-
-sort!(cand_df_formatted, :mlik, rev=true)
-
-datacells = hcat(
-    Cell.(cand_df_formatted.formula),
-    Cell.(cand_df_formatted.mlik_formatted),
-    Cell.(cand_df_formatted.dic_formatted),
-    Cell.(cand_df_formatted.waic_formatted),
-    Cell.(cand_df_formatted.slope)
-)
-
-labels
-
-table_two_vars = Table(vcat(labels', datacells))
-
-doc = W.Document(
-    W.Body([
-        W.Section([
-            W.Paragraph([
-                W.Run([W.Text("Table 1")]),
-            ]),
-            SummaryTables.to_docx(table2),
-        ]),
-        W.Section([
-            W.Paragraph([
-                W.Run([W.Text("Table 2. Candidate models with two environmental variables")]),
-            ]),
-            SummaryTables.to_docx(table_two_vars),
-        ]),
-    ]),
-)
-
-W.save(joinpath("images", "tables.docx"), doc)
 
 # Simple figure for graphical abstract
 prev = filter(x -> x.scope == "Selected cattle", annual_stats).flukes

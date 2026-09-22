@@ -56,6 +56,83 @@ runinla <- function(x) inla(
   control.inla = list(strategy = "simplified.laplace"),
 )
 
+### Postprocessing functions
+
+# compute stats relative to backbone - or store actual values
+compute_diff_stats <- function(res, ref) {
+  bad <- res$cpo$failure > 0 | ref$cpo$failure > 0
+
+  if (identical(res, ref)) {
+    cpo <- log(ref$cpo$cpo)[!bad]
+    c(
+      waic_diff = ref$waic$waic,
+      dic_diff = ref$dic$dic,
+      waic_diff_se = sqrt(length(ref$waic$local.waic) * var(ref$waic$local.waic)),
+      dic_diff_se = sqrt(length(ref$dic$local.dic) * var(ref$dic$local.dic)),
+      cpo_diff = sum(cpo),
+      cpo_diff_se = sqrt(length(cpo) * var(cpo))
+    )
+  } else {
+    waic_pointwise_diff <- res$waic$local.waic - ref$waic$local.waic
+    waic_diff_se <- sqrt(length(waic_pointwise_diff) * var(waic_pointwise_diff))
+
+    dic_pointwise_diff <- res$dic$local.dic - ref$dic$local.dic
+    dic_diff_se <- sqrt(length(dic_pointwise_diff) * var(dic_pointwise_diff))
+
+    d <- log(res$cpo$cpo) - log(ref$cpo$cpo)
+    bad <- bad | !is.finite(d)
+    d <- d[!bad]
+
+    c(
+      waic_diff = res$waic$waic - ref$waic$waic,
+      dic_diff = res$dic$dic - ref$dic$dic,
+      waic_diff_se = waic_diff_se,
+      dic_diff_se = dic_diff_se,
+      cpo_diff = sum(d),
+      cpo_diff_se = sqrt(length(d) * var(d))
+    )
+  }
+}
+
+mat_to_vect <- function(m) setNames(as.vector(m),
+              paste0(rep(colnames(m), each = nrow(m)),
+                     "_",
+                     rep(rownames(m), times = ncol(m))))
+
+# get posterior variance from precision
+parse_precision <- function(res, name){
+  m <- res$internal.marginals.hyperpar[[paste0("Log precision for ", name)]]
+  m.var <- inla.tmarginal(function(x) 1/exp(x), m)
+  post_var <- inla.zmarginal(m.var, silent = TRUE)
+  post_var <- unlist(post_var[c("mean", "quant0.025", "quant0.975")])
+  names(post_var) <- paste0(gsub("_", "", name), "_", names(post_var))
+  post_var
+}
+
+# Build an n_obs x n_models matrix of LPD's from INLA's CPO, for loo weights
+cpo_lpd_matrix <- function(results_list) {
+  failure_flags <- sapply(results_list, function(x) x$cpo$failure > 0)  # n_obs x K
+  failure_counts <- colSums(failure_flags, na.rm = TRUE)
+  if (any(failure_counts > 0)) {
+    warning(
+      sum(failure_counts > 0), " of ", length(results_list), " model(s) have a nonzero ",
+      "cpo$failure count (", paste(failure_counts[failure_counts > 0], collapse = ", "),
+      "); excluding the flagged observations from the weight computation for every model."
+    )
+  }
+  lpd <- sapply(results_list, function(x) log(x$cpo$cpo))
+  bad_obs <- which(rowSums(!is.finite(lpd)) > 0 | rowSums(failure_flags, na.rm = TRUE) > 0)
+  if (length(bad_obs) > 0) {
+    warning(
+      length(bad_obs), " observation(s) have a non-finite or failure-flagged CPO in at ",
+      "least one model; dropping them from the weight computation."
+    )
+    lpd <- lpd[-bad_obs, , drop = FALSE]
+  }
+  lpd
+}
+
+
 ####### Test many models with many possible variable combinations
 # normal variables - include or not
 random_vars <- c(
@@ -125,81 +202,25 @@ model_list$formula <- lapply(seq_len(nrow(model_list)), function(i) {
 model_results <- lapply(model_list$formula, runinla)
 # Get estimates for goodness of fit
 model_list$mlik <- sapply(model_results, function(x) x$mlik[2])
-model_list$waic <- sapply(model_results, function(x) x$waic$waic)
-model_list$dic <- sapply(model_results, function(x) x$dic$dic)
-model_list$dic_sat <- sapply(model_results, function(x) x$dic$dic.sat)
+#model_list$waic <- sapply(model_results, function(x) x$waic$waic)
+#model_list$dic <- sapply(model_results, function(x) x$dic$dic)
+#model_list$dic_sat <- sapply(model_results, function(x) x$dic$dic.sat)
 
-# calculate WAIC and CPO differences and SE relative to equivalent model w/o environmental var
-model_list$row_id <- seq_len(nrow(model_list))
+# calculate status relative to backbone
+model_list$row_id <- seq_along(model_results)
 model_list <- model_list %>%
   group_by(øko, chr, slagtid, time, spacetime) %>%
-  mutate(
-    backbone_row_id = row_id[y == "1"],
-    waic_diff = waic - waic[y == "1"],
-    dic_diff = dic - dic[y == "1"]
-  ) %>%
+  mutate(backbone_row_id = row_id[y == "1"]) %>%
   ungroup() %>%
   as.data.frame()
 
-model_list$waic_diff_se <- mapply(function(i, j) {
-  pointwise_diff <- model_results[[i]]$waic$local.waic - model_results[[j]]$waic$local.waic
-  sqrt(length(pointwise_diff) * var(pointwise_diff))
-}, model_list$row_id, model_list$backbone_row_id)
+diff_stats <- t(mapply(function(i, j) {
+  compute_diff_stats(model_results[[i]], model_results[[j]])
+}, model_list$row_id, model_list$backbone_row_id))
+model_list <- cbind(model_list, diff_stats)
 
-
-cpo_diffs <- mapply(function(i, j) {
-  res_i <- model_results[[i]]
-  res_j <- model_results[[j]]
-  bad <- res_i$cpo$failure > 0 | res_j$cpo$failure > 0
-  d <- log(res_i$cpo$cpo) - log(res_j$cpo$cpo)
-  bad <- bad | !is.finite(d)
-  d[!bad]
-  c(cpo_diff = sum(d), cpo_diff_se = sqrt(length(d) * var(d)), bad_idx = list(which(bad)))
-}, model_list$row_id, model_list$backbone_row_id)
-
-model_list$cpo_diff <- unlist(cpo_diffs["cpo_diff", ])
-model_list$cpo_diff_se <- unlist(cpo_diffs["cpo_diff_se", ])
-#model_list$cpo_bad <- cpo_diffs["bad_idx", ]
-
-#### Write CSV file with full posteriors for every one of the 1080 models
+#### Write CSV file with full posteriors
 # convert to named vector with names "columnname_rowname"
-mat_to_vect <- function(m) setNames(as.vector(m),
-              paste0(rep(colnames(m), each = nrow(m)),
-                     "_",
-                     rep(rownames(m), times = ncol(m))))
-
-# get posterior variance from precision
-parse_precision <- function(res, name){
-  m <- res$internal.marginals.hyperpar[[paste0("Log precision for ", name)]]
-  m.var <- inla.tmarginal(function(x) 1/exp(x), m)
-  post_var <- inla.zmarginal(m.var, silent = TRUE)
-  post_var <- unlist(post_var[c("mean", "quant0.025", "quant0.975")])
-  names(post_var) <- paste0(gsub("_", "", name), "_", names(post_var))
-  post_var
-}
-
-# Build an n_obs x n_models matrix of LPD's from INLA's CPO, for loo weights
-cpo_lpd_matrix <- function(results_list) {
-  failure_flags <- sapply(results_list, function(x) x$cpo$failure > 0)  # n_obs x K
-  failure_counts <- colSums(failure_flags, na.rm = TRUE)
-  if (any(failure_counts > 0)) {
-    warning(
-      sum(failure_counts > 0), " of ", length(results_list), " model(s) have a nonzero ",
-      "cpo$failure count (", paste(failure_counts[failure_counts > 0], collapse = ", "),
-      "); excluding the flagged observations from the weight computation for every model."
-    )
-  }
-  lpd <- sapply(results_list, function(x) log(x$cpo$cpo))
-  bad_obs <- which(rowSums(!is.finite(lpd)) > 0 | rowSums(failure_flags, na.rm = TRUE) > 0)
-  if (length(bad_obs) > 0) {
-    warning(
-      length(bad_obs), " observation(s) have a non-finite or failure-flagged CPO in at ",
-      "least one model; dropping them from the weight computation."
-    )
-    lpd <- lpd[-bad_obs, , drop = FALSE]
-  }
-  lpd
-}
 
 posteriors_summarized <- mapply(function(res, m){
   # Fixed posteriors
@@ -278,24 +299,6 @@ two_var_list$waic <- sapply(two_var_results, function(x) x$waic$waic)
 two_var_list$dic <- sapply(two_var_results, function(x) x$dic$dic)
 two_var_list$dic_sat <- sapply(two_var_results, function(x) x$dic$dic.sat)
 
-# waic/dic/cpo differences relative to the backbone-3 null model (no env vars)
-compute_diff_stats <- function(res, ref) {
-  pointwise_diff <- res$waic$local.waic - ref$waic$local.waic
-  waic_diff_se <- sqrt(length(pointwise_diff) * var(pointwise_diff))
-
-  bad <- res$cpo$failure > 0 | ref$cpo$failure > 0
-  d <- log(res$cpo$cpo) - log(ref$cpo$cpo)
-  bad <- bad | !is.finite(d)
-  d <- d[!bad]
-
-  c(
-    waic_diff = res$waic$waic - ref$waic$waic,
-    dic_diff = res$dic$dic - ref$dic$dic,
-    waic_diff_se = waic_diff_se,
-    cpo_diff = sum(d),
-    cpo_diff_se = sqrt(length(d) * var(d))
-  )
-}
 diff_stats <- t(sapply(two_var_results, compute_diff_stats, ref = backbone3_result))
 two_var_list <- cbind(two_var_list, diff_stats)
 
@@ -344,3 +347,51 @@ two_var_draws <- bind_rows(lapply(seq_len(nrow(two_var_list)), function(i) {
 }))
 
 write.csv(two_var_draws, paste0("posterior_draws_twovars_", Sys.Date(), ".csv"), row.names = FALSE)
+
+
+#############
+## Write for spatio-temporal effect
+optimal_model <-  update(backbones[[5]], y ~ . + def_summer_year1)
+res <- runinla(optimal_model)
+
+# export for estimates of abattoir random effect
+write.csv(res$summary.random$slagteri_id, "slagteri_posterior.csv", row.names = FALSE)
+
+#### Export posteroir spatiotemporal component
+library(fmesher)
+library(terra)
+library(ncdf4)
+
+nsamples <- 500
+samples <- inla.posterior.sample(nsamples, res)
+
+space_indices <- grep("space", rownames(samples[[1]]$latent))
+space_samples <- lapply(samples, function(s) s$latent[space_indices])
+
+dkrast <- rast("data/terraclimate_dk.nc", lyrs = 1)
+dkpoints <- crds(dkrast, na.rm = TRUE)
+ev <- fm_evaluator(mesh, loc = dkpoints)
+
+rast_template <- rast(dkrast, nlyrs = 14)
+namask <- !is.na(dkrast)
+
+for (i in 1:nsamples){
+  mmat <- matrix(space_samples[[i]], nrow = mesh$n)
+  vals <- fm_evaluate(ev, mmat)
+  rast_template[namask] <- c(vals)
+  writeRaster(rast_template, paste0("/home/tvd/K/FasciolaDK/posterior_spatiotemporal", i, ".tif"), overwrite = TRUE)
+}
+
+post_effect_def <- t(sapply(samples, function(s) s$latent[c("year:1", "def_summer_year1:1", "Intercept:1"), ]))
+colnames(post_effect_def) <- gsub(":1", "", colnames(post_effect_def))
+post_effect_def <- data.frame(draw = seq_len(nsamples), post_effect_def)
+
+# Take into account that random abattoirs have much higher random effects - otherwise the risk is close to 0
+slagteri_indices <- grep("^slagteri_id:", rownames(samples[[1]]$latent))
+animal_counts <- tapply(data$count, data$slagteri_id, sum)
+slagteri_weighted_draws <- sapply(samples, function(s) {
+  weighted.mean(s$latent[slagteri_indices, ], w = animal_counts)
+})
+
+post_effect_def$Intercept <- post_effect_def$Intercept + slagteri_weighted_draws
+write.csv(post_effect_def, paste0("posterior_effect_def_year_", Sys.Date(), ".csv"), row.names = FALSE)

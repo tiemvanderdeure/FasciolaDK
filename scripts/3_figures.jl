@@ -1,9 +1,11 @@
 using FasciolaDK
-using Rasters, DataFrames, CSV, Statistics
+using Rasters, DataFrames, CSV, Statistics, LinearAlgebra
 using CairoMakie, AlgebraOfGraphics
 import GeometryOps as GO, GeoInterface as GI, GADM, GeometryBasics
 import Rasters: dims
-import FasciolaDK: to_pct_label, Label_subplot, plot_denmark!, vsup_colormatrix, vsup_legend
+import FasciolaDK: to_pct_label, Label_subplot, plot_denmark!, vsup_colormatrix, vsup_legend, varname_to_label
+
+global output_date = "2026-09-18" # Dates.today()
 
 ### Some basic functions and data used in multiple figures
 dk_munic = GADM.get("DNK"; depth=2) |> DataFrame
@@ -28,55 +30,60 @@ climatenormals_yearly.ppt .*= 4 # to get seasonal totals
 
 fig1 = let
     season_names = [
-        1 => "Winter",
-        2 => "Spring",
         3 => "Summer",
-        4 => "Autumn"
+        4 => "Autumn",
+        1 => "Winter",
+        2 => "Spring"
     ]
-    names = (tavg="Temperature", ppt="Precipitation", ollerenshaw="Ollerenshaw index",
-        soil="Soil moisture", def="Climate water deficit"
-    )
     colorbarlabels = (
         tavg="Annual average temperature (°C)",
         ppt="Annual total precipitation (mm)",
         ollerenshaw="Annual Ollerenshaw index",
+        def="Summer Climate Water Deficit (mm)",
         soil="Summer Soil Moisture (mm)",
-        def="Summer Climate Water Deficit (mm)"
     )
+    colormaps = (
+        tavg = :magma, 
+        ppt = :blues, 
+        ollerenshaw = :viridis, 
+        def = :magma,
+        soil = :blues, 
+    )
+    units = [:tavg, :ppt, :ollerenshaw, :def, :soil] .=> 
+        ["Anomaly (°C)", "Anomaly (mm)", "Ollerenshaw index", "Anomaly (mm)", "Anomaly (mm)"]
 
     # AoG specification
     spec = data(yearly_anomalies) * mapping(
                :year => "",
-               [:tavg, :ppt, :ollerenshaw, :soil, :def] .=> ["Anomaly (°C)", "Anomaly (mm)", "Ollerenshaw index", "Anomaly (mm)", "Anomaly (mm)"],
-               col=AlgebraOfGraphics.dims(1) => renamer(collect(names)),
-               linestyle=:season => renamer(season_names)
+               units,
+               col=AlgebraOfGraphics.dims(1) => renamer(collect(FasciolaDK.envvar_display_names[first.(units)])),
+               linestyle=:season => (nonnumeric ∘ renamer(season_names))
            ) * visual(Lines)
 
     figuregrid = draw(
         spec,
         axis=(limits=(2010, 2023, nothing, nothing), xticks=2010:2:2024, xminorgridvisible=true, titlesize=14),
-        figure=(title="Seasonal weather anomalies", titlealign=:center, size=(900, 1200), fontsize=12),
+        figure=(title="Seasonal weather anomalies", titlealign=:center, size=(875, 1200), fontsize=12),
         legend=(labelsize=14, titlesize=14, halign=:left, valign=:top, tellwidth=false)
     )
 
     fig = figuregrid.figure
 
-    for (i, var, cmap) in zip(1:5, keys(names), [:magma, :blues, :viridis, :blues, :magma])
+    for (i, var) in enumerate(first.(units))
+        # plot averages
         ax = Axis(fig[2, i])
         hidedecorations!(ax)
         hidespines!(ax)
-        pl = FasciolaDK.plot_denmark!(ax, climatenormals_yearly[var]; colormap=cmap)
+        pl = FasciolaDK.plot_denmark!(ax, climatenormals_yearly[var]; colormap=colormaps[var])
         Colorbar(fig[3, i], pl;
             label=colorbarlabels[var],
             labelfont=:bold,
             vertical=false
         )
-    end
-    # Add labels A-B-C to the subplots
-    for i in 1:length(names)
+        # Add labels A-B-C to the subplots
         Label_subplot(fig[1, i, Top()], i, fontsize=14)
     end
-
+    
     # Move contents around -- kind of annoying
     for i in 1:3
         for j in 1:3
@@ -177,20 +184,145 @@ end;
 
 save("images/figure2.png", fig2; pt_per_unit=20)
 
-##### Posterior estimates of the INLA model for prevalence over space and time
+#### Posteriors of effects of weather variables ####
+# Figure 3 
+posterior_draws = CSV.read("posterior_draws_envvars_$output_date.csv", Tables.rowtable)
+posterior_draws = broadcast(posterior_draws) do row
+    model = (; row.øko, row.chr, row.slagtid, row.time, row.spacetime)
+    return (; model, row.y, row.draw, row.value)
+end
+posterior_da = DimArray(posterior_draws, (Dim{:model}(DimensionalData.Categorical()), :y, :draw))
+
+focus_models = dims(posterior_da, :model)
+
+posteriors_df = CSV.read("model_runs_posteriors$output_date.csv", DataFrame)
+mean_waic_diff = DataFrames.combine(groupby(posteriors_df, :y), [:waic_diff, :dic_diff, :cpo_diff] .=> mean)
+envs_sorted = filter(!=("1"), sort(mean_waic_diff, :waic_diff_mean).y)
+
+fig3, figsup_posteriors = map([envs_sorted[1:10], envs_sorted[11:end]]) do envs
+    focus_posteriors = posterior_da[y = At(envs)]
+    labels = ["Organic + abattoir", "... + spatial", "... + herd ID", "... + time", "... + spatiotemporal"]
+    modellabels = [m => l for (m,l) in zip(focus_models, labels)]
+    envlabels = [v => varname_to_label(v) for v in envs]
+
+    n_env = length(envs)
+    n_model = length(focus_models)
+    ylim = quantile(vec(abs.(parent(focus_posteriors))), 0.998) * 1.1
+
+    fig = Figure(size = (max(700, 120 * n_env), 650))
+
+    spec = data(focus_posteriors) * visual(Violin; show_median = true) *
+        mapping(
+            :y => renamer(envlabels) => "",
+            :value => "Posterior effect (log-odds)",
+            color = :model => renamer(modellabels) => "Model backbone",
+            dodge = :model => renamer(modellabels),
+        )
+
+    grid = draw!(fig[1, 1], spec,
+        scales(Color = (; palette = from_continuous(:viridis)));
+        axis = (
+            limits = ((0.5,n_env +0.5), (-ylim, ylim)),
+            xticklabelrotation = pi / 4,
+            xaxisposition = :top,
+            xgridvisible = false,
+            xticklabelalign = (:left, :bottom),
+            xticksvisible = false
+        ),
+    )
+    legend!(fig[1, 2], grid; title = "Model", labelsize = 18, titlesize = 20)
+
+    ax = grid[1,1].axis
+    hlines!(ax, 0; color = :black, linewidth = 1)
+    for i in 2:2:n_env
+        vspan!(ax, i - 0.5, i + 0.5; color = (:black, 0.06))
+    end
+
+    return fig
+end
+
+save("images/newfig3.png", fig3)
+save("images/figure_S2_posterior_effects.png", figsup_posteriors)
+
+
+###### Two-variable models ##########
+# Figure 4
+two_var_df = CSV.read("model_runs_posteriors_twovars_$output_date.csv", DataFrame)
+
+backbone3_single = filter(
+    row -> row.øko && row.chr && row.slagtid && !row.time && row.spacetime == "space",
+    posteriors_df,
+)
+heat_vars = envs_sorted[1:7]
+n_heat = length(heat_vars)
+
+effect_matrix = fill(NaN, n_heat, n_heat)
+effect_matrix025 = fill(NaN, n_heat, n_heat)
+effect_matrix975 = fill(NaN, n_heat, n_heat)
+
+map(eachrow(two_var_df)) do row
+    i = findfirst(==(row.envvar1), heat_vars)
+    j = findfirst(==(row.envvar2), heat_vars)
+    effect_matrix[j,i] = row.envvar1_mean
+    effect_matrix025[j,i] = row.var"envvar1_quant0.025"
+    effect_matrix975[j,i] = row.var"envvar1_quant0.975"
+    effect_matrix[i,j] = row.envvar2_mean
+    effect_matrix025[i,j] = row.var"envvar2_quant0.025"
+    effect_matrix975[i,j] = row.var"envvar2_quant0.975"
+end
+effect_matrix[diagind(effect_matrix)] .=  backbone3_single.envvar_mean[indexin(heat_vars, backbone3_single.y)]
+effect_matrix025[diagind(effect_matrix)] .=  backbone3_single.var"envvar_quant0.025"[indexin(heat_vars, backbone3_single.y)]
+effect_matrix975[diagind(effect_matrix)] .=  backbone3_single.var"envvar_quant0.975"[indexin(heat_vars, backbone3_single.y)]
+
+heat_labels = varname_to_label.(heat_vars)
+
+plot_data = effect_matrix[1:end,end:-1:1]
+effect_lim = maximum(abs, filter(!isnan, plot_data))
+xsize, ysize = size(plot_data)
+
+fig, ax, pl = heatmap(plot_data;
+    axis = (
+        xticks = (1:xsize, heat_labels[1:xsize]), yticks = (ysize:-1:1, heat_labels[1:ysize]),
+        xticklabelrotation = pi / 4, xticklabelalign = (:right, :top),
+        ylabel = "Effect of ↓", xlabel = "controlling for →",
+        xlabelfont = :bold, ylabelfont = :bold,
+        #title = "Two-variable models: effect of each variable controlling for another",
+        titlesize = 18,
+    ),
+    figure = (; size = (900, 800)),
+    colormap = Reverse(:RdBu), colorrange = (-effect_lim, effect_lim),
+    nan_color = :lightgray,
+)
+
+diag_boxes = [Rect2f(k - 0.5, (xsize + 1 - k) - 0.5, 1, 1) for k in 1:xsize]
+poly!(ax, diag_boxes; color = :transparent, strokecolor = :black, strokewidth = 1)
+
+labels = cor_to_string.(plot_data)
+text!(ax, 
+    vec(Tuple.(CartesianIndices(plot_data))); text = vec(labels),
+    align = (:center, :center))
+Colorbar(fig[1, 2], pl, label = "Posterior mean effect (log-odds)")
+fig
+
+save(joinpath("images", "figure4_twovar_effect_heatmap.png"), fig)
+
+
+############ Posterior estimate of prevalence in space and time ############
+# Figure 5
 import StatsFuns: logistic
 logistic(::Missing) = missing # tiny bit of type piracy to make this work
+maybe_quantile(x, args...) = any(ismissing, x) ? missing : quantile(x, args...)
 
-# Random effect
-r_effect_raw = RasterSeries(joinpath("/home/tvd/K/FasciolaDK", "posterior_spatiotemporal.tif"), Dim{:iter}(Int)) |> Rasters.combine
-iter_sorted = sort(lookup(r_effect_raw, :iter)) # make sure the order is right here - file system re-orders these so 10 is before 2!
-r_effect = set(r_effect_raw[iter=At(iter_sorted)], Rasters.Band => Rasters.format(Dim{:year}(2010:2023))) # fix a dimension
+# Spatiotemporal random effect
+r_effect_raw = RasterSeries(joinpath("/home/tvd/K/FasciolaDK", "posterior_spatiotemporal.tif"), Dim{:draw}(Int)) |> Rasters.combine
+iter_sorted = sort(lookup(r_effect_raw, :draw)) # make sure the order is right here - file system re-orders these so 10 is before 2!
+r_effect = set(r_effect_raw[draw=At(iter_sorted)], Rasters.Band => Rasters.format(Dim{:year}(2010:2023))) # fix a dimension
 
 # Environmental variables - but of manual renaming
-climate = get_terraclimate((:tavg, :ppt))
+climate = get_terraclimate((:def,))
 climatevars = climate[season=3, year=1:End()-1]
 env_vars = RasterStack(
-    values(set(climatevars; year=dims(climatevars, :year) .+ 1)); # fix year dimension
+    values(set(climatevars, :year => dims(climatevars, :year) .+ 1)); # fix year dimension
     name=Symbol.(string.(keys(climatevars)) .* "_summer_year1") # fix names
 )
 
@@ -199,37 +331,34 @@ normalization = CSV.read("vars_normalized.csv", Tables.columntable; select=colle
 env_vars_norm = maplayers(env_vars, normalization) do v, n
     (v .- n[1]) ./ n[2]
 end
+year_dim = dims(env_vars_norm, :year)
+data_vars = merge(env_vars_norm, 
+    RasterStack((; year = DimArray(1:14, (year_dim,)), Intercept = DimArray(fill(1,), ()))))
 
-posterior_env_effect = CSV.read("posterior_effects_envvars_samples2026-06-15.csv", Tables.rowtable)
-
-env_effects = map(posterior_env_effect) do r
-    #mapreduce(+, r[keys(env_vars_norm)], layers(env_vars_norm)) do r, e
-    mapreduce(+, r[(:tavg_summer_year1, :ppt_summer_year1)], layers(env_vars_norm)) do r, e
-        r .* e
-    end
+# Read in fixed effects, def_summer_year1+year+intercept
+posterior_env_effect = CSV.read("posterior_effect_def_year_2026-09-22.csv", Tables.columntable)
+posterior_effect_ds = DimStack(posterior_env_effect, (:draw,))
+posterior_effects_spatial = maplayers(data_vars, posterior_effect_ds[keys(data_vars)]) do r, e
+    @d r .* e
 end
 
-env_effects_combined = RasterSeries(env_effects, dims(r_effect, :iter)) |> Rasters.combine
+effects_combined = mapreduce(identity, (x,y) -> (@d x .+ y), layers(posterior_effects_spatial))
 
-intercepts = DimVector(getfield.(posterior_env_effect, :Intercept), dims(r_effect, :iter))
-
-posterior_estimate_logscale = @d r_effect .+ env_effects_combined .+ intercepts strict = false
+posterior_estimate_logscale = r_effect .+ parent(effects_combined)
 
 posterior_estimate = logistic.(posterior_estimate_logscale)
-posterior_estimate_mean = dropdims(mean(posterior_estimate; dims=:iter); dims=:iter)
-maybe_quantile(x, args...) = any(ismissing, x) ? missing : quantile(x, args...)
+posterior_estimate_mean = dropdims(mean(posterior_estimate; dims=:draw); dims=:draw)
 posterior_estimate_025 = rebuild(
     posterior_estimate_mean; 
-    data=parent(maybe_quantile.(eachslice(posterior_estimate; dims=otherdims(posterior_estimate, :iter)), 0.025)))
-
+    data=parent(maybe_quantile.(eachslice(posterior_estimate; dims=otherdims(posterior_estimate, :draw)), 0.025)))
 posterior_estimate_975 = rebuild(
     posterior_estimate_mean; 
-    data=parent(maybe_quantile.(eachslice(posterior_estimate; dims=otherdims(posterior_estimate, :iter)), 0.975)))
+    data=parent(maybe_quantile.(eachslice(posterior_estimate; dims=otherdims(posterior_estimate, :draw)), 0.975)))
 
 fig3, figs1, figs2 = map((posterior_estimate_mean, posterior_estimate_025, posterior_estimate_975)) do r
     let fig = Figure(size=(800, 900)),
         nrows = 4,
-        colorrange = (0, 0.4),
+        colorrange = (0, 0.35),
         colormap = :plasma
 
         mean_over_time = dropdims(mean(r; dims=:year); dims=:year)
@@ -270,8 +399,8 @@ save("images/figure3.eps", fig3)
 save("images/figures1_prevalence_lower.png", figs1; pt_per_unit=10)
 save("images/figures2_prevalence_upper.png", figs2; pt_per_unit=10)
 
-env_effect_mean = dropdims(mean(env_effects_combined; dims=:iter); dims=:iter)
-random_effect_mean = dropdims(mean(r_effect; dims=:iter); dims=:iter)
+env_effect_mean = dropdims(mean(posterior_effects_spatial.def_summer_year1; dims=:draw); dims=:draw)
+random_effect_mean = dropdims(mean(r_effect; dims=:draw); dims=:draw)
 
 figs3, figs4 = map((env_effect_mean, random_effect_mean), (1, 3)) do r, cr
     let fig = Figure(size=(800, 900)),
@@ -315,78 +444,73 @@ end
 save("images/figureS3_env_effect.png", figs3; pt_per_unit=10);
 save("images/figureS4_random_effect.png", figs4; pt_per_unit=10)
 
-#### Tables with posteriors of INLA models
-using SummaryTables, DataFrames, Printf, StatsBase, CSV
-import WriteDocx as W
+########## Supplementary Tables
+
+#### Tables with posteriors of INLA models, grouped by backbone
+using SummaryTables, DataFrames, Printf
+import WriteDocx as W, StatsBase
 
 to_95_interval(m, l, u) = @sprintf "%.2f (%.2f - %.2f)" m l u
 to_95_interval(::Missing, l, u) = ""
 add_rank(x::AbstractVector; rev) =
     [@sprintf "%.1f (%d)" xi r for (xi, r) in zip(x, StatsBase.ordinalrank(x; rev))]
-function pseudo_formula(r)
-    vars = String[]
-    r.øko && push!(vars, "organic")
-    r.chr && push!(vars, "chr")
-    r.slagtid && push!(vars, "abattoir")
-    r.y != "1" && push!(vars, r.y)
-    isempty(vars) ? "null" : join(vars, " + ")
-end
+to_diff_se(d, se) = @sprintf "%.1f (%.1f)" d se
+to_diff_se(::Missing, se) = ""
 
-posteriors_df = CSV.read("model_runs_posteriors2026-06-13.csv", DataFrame)
-sort!(posteriors_df, :mlik, rev=true)
+backbone_labels = ["Organic + abattoir", "... + spatial", "... + herd ID", "... + time", "... + spatiotemporal"]
 
-posteriors_df_formatted = transform(
-    posteriors_df,
-    (
-        Symbol.(var .* "_" .* ["mean", "quant0.025", "quant0.975"])
-        =>
-            ByRow(to_95_interval) => Symbol("$(var)_formatted")
-        for var in ("Intercept", "øko", "chr", "slagteriid", "envvar")
-    )...,
-)
+backbone_groups = groupby(posteriors_df, [:øko, :chr, :slagtid, :time, :spacetime])
+backbone_keys = [NamedTuple(k) for k in keys(backbone_groups)]
+group_order = [findfirst(==(m), backbone_keys) for m in focus_models]
 
-posteriors_df_formatted.mlik_formatted = add_rank(posteriors_df.mlik; rev=true)
-posteriors_df_formatted.waic_formatted = add_rank(posteriors_df.waic; rev=false)
-posteriors_df_formatted.dic_formatted = add_rank(posteriors_df.dic; rev=false)
-posteriors_df_formatted.formula = pseudo_formula.(eachrow(posteriors_df_formatted))
-# drop duplicate formulas, keeping the one with the best mlik
-posteriors_df_formatted = unique(posteriors_df_formatted, [:formula, :spacetime])
+bordered_cells(v, mask) = [Cell(x; border_bottom=b) for (x, b) in zip(v, mask)]
 
-posteriors_df_formatted.include .= false
-posteriors_df_formatted.include[1:10] .= true
-posteriors_df_formatted[
-    findfirst(x -> x.formula == "organic + chr + abattoir" && x.spacetime == "spacetime", eachrow(posteriors_df_formatted)),
-    :include] = true
+backbone_tables = map(zip(group_order, backbone_labels)) do (gi, label)
+    df = sort(backbone_groups[gi], :mlik, rev=true)
+    df.envlabel = varname_to_label.(df.y, sep = " - ")
 
-for sp in unique(posteriors_df_formatted.spacetime)
-    posteriors_df_formatted.include[findall(posteriors_df_formatted.spacetime .== sp)[1:3]] .= true
-end
-posteriors_df_formatted[posteriors_df_formatted.formula.=="null", :include] .= true
-
-labels = Cell.(["Formula", "m. lik. (rank)", "DIC (rank)", "WAIC (rank)", "slope (95% CI)"]; bold=true, border_bottom=true)
-
-grps = groupby(posteriors_df_formatted, :spacetime)
-cells = mapreduce(vcat, unique(posteriors_df_formatted.spacetime)) do sp
-    grp = grps[(spacetime=sp,)]
-    df = grp[grp.include, :]
-    datacells = hcat(
-        Cell.(df.formula),
-        Cell.(df.mlik_formatted),
-        Cell.(df.dic_formatted),
-        Cell.(df.waic_formatted),
-        Cell.(df.envvar_formatted)
-    )
-    header = repeat(
-        [Cell("random effect: " * sp, merge=true, italic=true, border_bottom=true)],
-        size(datacells, 2)
+    fixed_vars = df.time[1] ? ("øko", "year", "envvar") : ("øko", "envvar")
+    df = transform(
+        df,
+        (
+            Symbol.(var .* "_" .* ["mean", "quant0.025", "quant0.975"])
+            =>
+                ByRow(to_95_interval) => Symbol("$(var)_formatted")
+            for var in fixed_vars
+        )...,
     )
 
-    return vcat(header', datacells)
+
+    df.waic_diff_formatted = to_diff_se.(df.waic_diff, df.waic_diff_se)
+    df.dic_diff_formatted = to_diff_se.(df.dic_diff, df.dic_diff_se)
+
+    # move the baseline row to the bottom, set off by a rule
+    df = vcat(filter(:y => !=("1"), df), filter(:y => ==("1"), df))
+    mask = falses(nrow(df))
+    mask[end-1] = true
+
+    col_labels = ["Environmental variable", "ΔWAIC (SE)", "ΔDIC (SE)", "Environmental effect (95% CI)", "Organic (95% CI)"]
+    col_labels2 = ["Backbone model", "WAIC (SE)", "DIC (SE)", " - ", "Organic (95% CI)"]
+    columns =  [:envlabel, :waic_diff_formatted, :dic_diff_formatted, :envvar_formatted, :øko_formatted]
+    if df.time[1]
+        push!(col_labels, "Year (95% CI)")
+        push!(col_labels2, "Year (95% CI)")
+        push!(columns, :year_formatted)
+    end
+    cols = [bordered_cells(df[!, x], mask) for x in columns]
+    valuecells = hcat(cols...)
+
+    header = Cell.(col_labels; bold=true, border_bottom=true)
+    header2 = Cell.(col_labels2; bold=true, border_bottom=true)
+    Table(vcat(header', valuecells[1:end-1,:], header2', valuecells[end:end,:]))
 end
 
-table1 = Table(vcat(labels', cells))
-
-CSV.write("images/posteriors_table.csv", posteriors_df)
+slug(s) = strip(replace(lowercase(s), r"[^a-z0-9]+" => "_"), '_')
+for (label, tbl) in zip(backbone_labels, backbone_tables)
+    open(joinpath("images", "table_posteriors_$(slug(label)).tex"), "w") do io
+        show(io, MIME"text/latex"(), tbl)
+    end
+end
 
 # the "main model"
 post_slagteri = CSV.read("slagteri_posterior.csv", DataFrame)
@@ -437,17 +561,11 @@ doc = W.Document(
             W.Paragraph([
                 W.Run([W.Text("Table 1")]),
             ]),
-            SummaryTables.to_docx(table1),
-        ]),
-        W.Section([
-            W.Paragraph([
-                W.Run([W.Text("Table 2")]),
-            ]),
             SummaryTables.to_docx(table2),
         ]),
         W.Section([
             W.Paragraph([
-                W.Run([W.Text("Table 3. Candidate models with two environmental variables")]),
+                W.Run([W.Text("Table 2. Candidate models with two environmental variables")]),
             ]),
             SummaryTables.to_docx(table_two_vars),
         ]),
@@ -464,3 +582,37 @@ fig, ax, pl = with_theme(theme_minimal()) do
     lines(yrs, prev, color = "black", axis = (ytickformat=to_pct_label,xticks = LinearTicks(5)), linewidth = 3)
 end
 save("images/prev_over_time_simple.png", fig; pt_per_unit=10)
+
+######### Supplementary Figures ##############
+
+### Supplementary figure - correlation heatmap
+preds = CSV.read("/home/tvd/K/FasciolaDK/predictors.csv", DataFrame)
+preds = preds[!, occursin.("year", names(preds))]
+preds = preds[!, .!in.(names(preds), Ref(["soil_winter_year2", "def_winter_year2"]))]
+# order so variables are grouped first by year, then by variable
+preds = preds[!, sortperm(getindex.(names(preds), Ref(1:3)))]
+
+cormat = cor(Matrix(preds))
+cormat[1:24 .>= collect(1:24)'] .= NaN
+cormat_to_plot = rotl90(cormat[1:end-1, 2:end])
+fig, ax, pl = heatmap(cormat_to_plot; 
+    axis = (
+        xticks = (1:23, names(preds)[end:-1:2]), 
+        yticks = (1:23, names(preds)[1:end-1]),
+        xticklabelrotation = pi/4,
+        xgridvisible = false, ygridvisible = false,
+        title = "Correlation between weather variables", titlesize = 22
+    ),
+    figure = (; size = (1200, 1200)),
+    colormap = Reverse(:RdBu), colorrange = (-1,1)
+)
+
+text!(ax, 
+    vec(Tuple.(CartesianIndices(cormat_to_plot))); text = vec(cor_to_string.(cormat_to_plot)),
+    align = (:center, :center))
+hidespines!(ax, :r); hidespines!(ax, :t)
+Colorbar(fig[1,1], pl, tellheight = false, tellwidth = false,
+    halign = 1.0, valign = 0.7, height = Relative(0.5),
+    flipaxis = false, label = "Correlation coefficient", labelsize = 18)
+fig
+save(joinpath("images", "correlation_coefficients.png"), fig)

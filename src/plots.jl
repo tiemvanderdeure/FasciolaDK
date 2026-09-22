@@ -129,3 +129,21 @@ function vsup_legend(gp, vsup_cmap; kw...)
     )
     mi.plots[1].interpolate[] = false
 end
+
+const envvar_display_names = (
+    tavg = "Temperature",
+    ppt = "Precipitation",
+    soil = "Soil moisture",
+    def = "Climatic water deficit",
+    ollerenshaw = "Ollerenshaw index",
+)
+function varname_to_label(x; sep = "\n")
+    x == "1" && return "None"
+    m = match(r"^(tavg|ppt|soil|def|ollerenshaw)(?:_(spring|summer|autumn|winter))?_year(\d+)$", x)
+    isnothing(m) && error("varname_to_label: unrecognised variable name \"$x\"")
+    var, season, yr = m.captures
+    label = envvar_display_names[Symbol(var)]
+    label = label * "$(sep)Year $yr"
+    label = isnothing(season) ? label : "$label $season"
+    return label
+end

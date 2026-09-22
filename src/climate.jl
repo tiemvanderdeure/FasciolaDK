@@ -31,7 +31,7 @@ function get_terraclimate_raw(vars = (:pet, :tavg, :ppt, :def, :soil), destdir =
     if force || !isfile(destdir)
         download_terraclimate(vars, destdir; silent = false)
     end
-    climate = RasterStack(destdir)
+    climate = RasterStack(destdir, name = vars)
     if :tavg in uservars
         tavg = _middle.(climate.tmax, climate.tmin)
         climate = RasterStack((; tavg, climate...))[uservars]

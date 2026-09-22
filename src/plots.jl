@@ -7,9 +7,12 @@ import GeoInterface as GI
 # Plot Denmark with bornholm on a inset
 function plot_denmark!(ax, ras::Raster; kw...)
     dk = copy(ras[X = 7 .. 12.8])
-    bornholm = ras[Extent(X = (14.5, 15.2), Y = (54.8, 55.5))]
-    dk[Extent(X = (11.8, 12.5), Y = (56.8, 57.5))] .= parent(bornholm)
-    poly!(ax, Rect2(11.85, 56.8,0.75,0.75), color = :transparent, strokecolor = :black, strokewidth = 1)
+    bornholm_extent = Extent(X = (14.5, 15.2), Y = (54.8, 55.5))
+    bornholm = view(ras, bornholm_extent)
+    sx, sy = step.(dims(dk))
+    copyto_ext = Extent(X = bornholm_extent.X .- ceil(2.7 / sx) * sx, Y = bornholm_extent.Y .+ ceil(2.0 / sy) * sy)
+    dk[copyto_ext] .= parent(bornholm)
+    poly!(ax, Rect2(copyto_ext.X[1], copyto_ext.Y[1],0.75,0.75), color = :transparent, strokecolor = :black, strokewidth = 1)
     plot!(ax,dk; kw...)
 end
 

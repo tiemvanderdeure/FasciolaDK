@@ -9,7 +9,7 @@ library(geodata)
 library(loo)
 geodata_path("/home/tvd/data/rgeodata")
 dk <- gadm("DNK", level = 0)
-dkbdry <- inla.sp2segment(sf::st_as_sf(dk))
+dkbdry <- fmesher::fm_as_segm(sf::st_as_sf(dk))
 
 data <- read.csv("/home/tvd/K/FasciolaDK/predictors.csv")
 data$øko = as.numeric(data$øko == "true")
@@ -289,7 +289,7 @@ colnames(var_pairs) <- c("envvar1", "envvar2")
 two_var_list <- var_pairs
 two_var_list$formula <- lapply(seq_len(nrow(two_var_list)), function(i) {
   update(backbone3_f, 
-    as.formula(paste(". ~ ", two_var_list$envvar1[i], two_var_list$envvar2[i], sep = "+")))
+    as.formula(paste("y ~ .", two_var_list$envvar1[i], two_var_list$envvar2[i], sep = "+")))
 })
 
 two_var_results <- lapply(two_var_list$formula, runinla)

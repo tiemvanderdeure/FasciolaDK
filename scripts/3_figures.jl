@@ -3,9 +3,11 @@ using Rasters, DataFrames, CSV, Statistics, LinearAlgebra
 using CairoMakie, AlgebraOfGraphics
 import GeometryOps as GO, GeoInterface as GI, GADM, GeometryBasics
 import Rasters: dims
-import FasciolaDK: to_pct_label, Label_subplot, plot_denmark!, vsup_colormatrix, vsup_legend, varname_to_label
+import Dates: today
+import FasciolaDK: to_pct_label, Label_subplot, plot_denmark!, 
+    vsup_colormatrix, vsup_legend, varname_to_label
 
-global output_date = "2026-09-18" # Dates.today()
+global output_date = today()
 
 ### Some basic functions and data used in multiple figures
 dk_munic = GADM.get("DNK"; depth=2) |> DataFrame
@@ -448,7 +450,7 @@ save("images/figureS4_random_effect.png", figs4; pt_per_unit=10)
 
 #### Tables with posteriors of INLA models, grouped by backbone
 using SummaryTables, DataFrames, Printf
-import WriteDocx as W, StatsBase
+import StatsBase
 
 to_95_interval(m, l, u) = @sprintf "%.2f (%.2f - %.2f)" m l u
 to_95_interval(::Missing, l, u) = ""

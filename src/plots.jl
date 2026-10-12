@@ -37,8 +37,10 @@ function to_pct_label(x)
     # if xs are all integer percentages, don't print decimals
     all(isapprox.(x1, xround)) && return string.(xround) .* "%"
     # otherwise, print with 2 significant digits
-    return [(@sprintf "%.1f" x) * "%" for x in x1]
+    return [(Printf.@sprintf "%.1f" x) * "%" for x in x1]
 end
+
+roundstring(x; digits = 2) = isnan(x) ? "" : Printf.format(Printf.Format("%.$(digits)f"), x)
 
 function Label_subplot(gp, n; kw...)
     text = "$('A'+(n-1)))"
@@ -138,7 +140,7 @@ const envvar_display_names = (
     ollerenshaw = "Ollerenshaw index",
 )
 function varname_to_label(x; sep = "\n")
-    x == "1" && return "None"
+    x == "1" && return ""
     m = match(r"^(tavg|ppt|soil|def|ollerenshaw)(?:_(spring|summer|autumn|winter))?_year(\d+)$", x)
     isnothing(m) && error("varname_to_label: unrecognised variable name \"$x\"")
     var, season, yr = m.captures

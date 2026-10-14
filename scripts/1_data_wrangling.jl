@@ -27,6 +27,16 @@ dyr_slagt.liverdisease = vec(any(Array(dyr_slagt[:, filter(!(==(Symbol(377))), s
 dyr_slagt.flukes = dyr_slagt[:, Symbol(377)]
 n_records["all_animals"] =  nrow(dyr_slagt)
 
+## Filter on slaughterhouse
+slagtbes_count = DataFrames.combine(groupby(dyr_slagt, :SLAGTBES_ID),
+    nrow => :n, :flukes => count, :liverdisease => count)
+# filter out any slaughterhouses where 1000+ animals and that reports liver condemntations
+filter!(x -> x.n > 1000 && !iszero(x.flukes_count + x.liverdisease_count), slagtbes_count)
+sort!(slagtbes_count, :n, rev = true)
+slagteri_included = Set(slagtbes_count.SLAGTBES_ID)
+filter!(x -> x.SLAGTBES_ID in slagteri_included, dyr_slagt)
+n_records["slaughterhouse_included"] = nrow(dyr_slagt)
+
 ## Initial filtering on just birth and slaughter dates
 # We only want animals born in spring and slaughtered in autumn of the next year
 dyr_slagt_sel = dyr_slagt[
@@ -121,16 +131,8 @@ n_records["not_grazing_elsewhere"] = nrow(animals_sel)
 animals_w_data = innerjoin(animals_sel, dyr_slagt_nodairyraces, on = :DYR_ID)
 
 ### Now add a slagteri id to each animal corresponding to the slaughterhouse they were slaughtered at
-slagtbes_count = DataFrames.combine(groupby(dyr_slagt, :SLAGTBES_ID),
-    nrow => :n, :flukes => count, :liverdisease => count)
-# filter out any slaughterhouses where 1000+ animals where slaughtered but not a single liver diagnosis
-# was made
-filter!(x -> !(x.n > 1000 && iszero(x.flukes_count) && iszero(x.liverdisease_count)), slagtbes_count)
-slagtbes_ordered = slagtbes_count.SLAGTBES_ID[sortperm(slagtbes_count.n, rev = true)]
-animals_w_data.slagteri_id = indexin(animals_w_data.SLAGTBES_ID, slagtbes_ordered)
-filter!(x -> !isnothing(x.slagteri_id), animals_w_data)
-animals_w_data.slagteri_id = denserank(animals_w_data.slagteri_id)
-n_records["slagteri_reports_disease"] = nrow(animals_w_data) 
+animals_w_data.slagteri_id = indexin(animals_w_data.SLAGTBES_ID, slagtbes_count.SLAGTBES_ID)
+filter!(x -> !isnothing(x.slagteri_id), animals_w_data) # just to get rid of union type
 
 # finally filter out any bes that have very few animals - to reduce the complexity of the problem
 animals_filtered2 = combine(identity, filter(x -> nrow(x) > 5, groupby(animals_w_data, :CHR_ID)))
@@ -191,7 +193,7 @@ end |> NamedTuple{keys(besclimate)}
 
 CSV.write("vars_normalized.csv", (map(collect, means_stds)))
 ## In-text numbers
-topct(x) = string(round(x * 100, digits=2)) * "%"
+topct(x) = string(round(x * 100, digits=1)) * "%"
 in_text_numbers = [
     "Number of animals (total): $(nrow(slagt))",
     "Number of animals (filtered): $(sum(predictorsdf.count))",
@@ -211,12 +213,12 @@ open(joinpath("in_text_numbers.txt"), "w") do io
 end
 
 n_records["included"] = sum(predictorsdf.count)
-n_records["excluded_birth_slaughter_dates"] = n_records["all_animals"] - n_records["age_range"]
+n_records["excluded_slagteri_not_reporting"] = n_records["all_animals"] - n_records["slaughterhouse_included"]
+n_records["excluded_birth_slaughter_dates"] = n_records["slaughterhouse_included"] - n_records["age_range"]
 n_records["excluded_dairy_races"] = n_records["age_range"] - n_records["not_dairy_race"]
 n_records["excluded_non_beef_herds"] = n_records["not_dairy_race"] - n_records["registered_as_beef"]
 n_records["excluded_grazing_elsewhere"] = n_records["registered_as_beef"] - n_records["not_grazing_elsewhere"]
-n_records["excluded_slagteri_not_reporting"] = n_records["not_grazing_elsewhere"] - n_records["slagteri_reports_disease"]
-n_records["excluded_bes_under_ten_animals"] = n_records["slagteri_reports_disease"] - n_records["included"]
+n_records["excluded_bes_under_ten_animals"] = n_records["not_grazing_elsewhere"] -  n_records["included"]
 
 open("records_filtering_data.tex", "w") do f
     for (key, value) in n_records
@@ -232,9 +234,11 @@ CSV.write(joinpath(datadir, "..", "predictors.csv"), predictors_with_lonlat)
 ## Write files for plotting
 import GADM, GeometryBasics, GeoInterface as GI, GeometryOps as GO
 ## Figure 1 - data over time
-dyr_slagt_included = innerjoin(slagtbes_count, dyr_slagt, on = :SLAGTBES_ID) # filter out abattoirs that do not report disease
-all_animals = dyr_slagt_included[:, [:SLAGTDATO, :liverdisease, :flukes]]
+all_animals = dyr_slagt[:, [:FOEDSELSDATO, :SLAGTDATO, :liverdisease, :flukes]]
 all_animals.yr = year.(all_animals.SLAGTDATO .- Month(3))
+all_animals.birth_month = month.(all_animals.FOEDSELSDATO)
+all_animals.slaughter_month = month.(all_animals.SLAGTDATO)
+all_animals.slaughter_age = getfield.(all_animals.SLAGTDATO .- all_animals.FOEDSELSDATO, :value)
 
 all_animals_yearly, selected_animals_yearly = map((all_animals, animals_filtered2)) do d
     combine(groupby(d, :yr)) do g
@@ -250,6 +254,11 @@ all_animals_yearly.scope .= "All cattle"
 selected_animals_yearly.scope .= "Selected cattle"
 annual_stats = vcat(all_animals_yearly, selected_animals_yearly)
 CSV.write(joinpath("data", "fig_1_annual_stats.csv"), annual_stats)
+
+for col in [:birth_month, :slaughter_month, :slaughter_age]
+    grouped = combine(groupby(all_animals, [:flukes, col]), nrow => :n)
+    CSV.write(joinpath("data", "sup_" * string(col) * ".csv"), grouped)
+end
 
 ## Figure 1 - data per municipality
 # danish municipalities
@@ -298,3 +307,10 @@ for c in [:n, :liver, :flukes]
 end
 CSV.write(joinpath("data", "fig_1_municipality_stats.csv"), municipality_stats)
 
+# Table slagteri -> posteriors make some bins in order to anonymize
+slagtbes_categories = searchsortedfirst.(Ref([5_000, 20_000, 100_000, 500_000]), slagtbes_count.n)
+io = open("slagteri_categories.txt", "w") do io
+  for x in slagtbes_categories
+    println(io, x)
+  end
+end

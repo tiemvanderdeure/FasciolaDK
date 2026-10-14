@@ -551,7 +551,7 @@ end
 # the "main model"
 post_slagteri = CSV.read("slagteri_posterior.csv", DataFrame)
 slagteri_categories = parse.(Int, readlines("slagteri_categories.txt"))
-categories = ["1,000-5,000", "5,000-20,000", "20,000-100,000", "100,000-500,000", ">500,000"]
+categories = ["1,000-5,000", "5,000-20,000", "20,000-100,000", "100,000-500,000", raw"\textgreater{}500,000"]
 post_slagteri.formatted = to_95_interval.(post_slagteri.mean, post_slagteri.var"0.025quant", post_slagteri.var"0.975quant")
 post_slagteri.label = string.(post_slagteri.ID)
 post_slagteri.category = categories[slagteri_categories]

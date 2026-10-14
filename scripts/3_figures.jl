@@ -208,16 +208,15 @@ fig3, figsup_posteriors = map([envs_sorted[1:10], envs_sorted[11:end]]) do envs
     envlabels = [v => varname_to_label(v) for v in envs]
 
     n_env = length(envs)
-    n_model = length(focus_models)
     ylim = quantile(vec(abs.(parent(focus_posteriors))), 0.998) * 1.1
 
-    fig = Figure(size = (max(700, 120 * n_env), 650))
+    fig = Figure(size = (max(700, 120 * n_env), 650), fontsize = 18)
 
     spec = data(focus_posteriors) * visual(Violin; show_median = true) *
         mapping(
             :y => renamer(envlabels) => "",
             :value => "Posterior effect (log-odds)",
-            color = :model => renamer(modellabels) => "Model backbone",
+            color = :model => renamer(modellabels) => "Included effects",
             dodge = :model => renamer(modellabels),
         )
 
@@ -317,7 +316,7 @@ fig4 = let
         axis = (
             xticks = (1:xsize, heat_labels[1:xsize]), yticks = (ysize:-1:1, heat_labels[1:ysize]),
             xticklabelrotation = pi / 4, xticklabelalign = (:right, :top),
-            ylabel = "Effect of ↓", xlabel = "controlling for →",
+            ylabel = "Effect of ↓", xlabel = "Controlling for ↑",
             xlabelfont = :bold, ylabelfont = :bold,
             #title = "Two-variable models: effect of each variable controlling for another",
             titlesize = 18,

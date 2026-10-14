@@ -1,14 +1,13 @@
 using FasciolaDK
 using Rasters, DataFrames, CSV, Statistics, LinearAlgebra
 using CairoMakie, AlgebraOfGraphics
-import GeometryOps as GO, GeoInterface as GI, GADM, GeometryBasics
+import GeometryOps as GO, GeoInterface as GI, GADM, GeometryBasics, Dates
 import Rasters: dims
-import Dates: today, Day
 import Random: shuffle!
 import FasciolaDK: to_pct_label, Label_subplot, plot_denmark!, 
     vsup_colormatrix, vsup_legend, varname_to_label, roundstring
 
-global output_date = today() - Day(1)
+global output_date = Dates.today()
 
 ### Some basic functions and data used in multiple figures
 dk_munic = GADM.get("DNK"; depth=2) |> DataFrame
@@ -244,9 +243,17 @@ fig3, figsup_posteriors = map([envs_sorted[1:10], envs_sorted[11:end]]) do envs
     return fig
 end
 
-save("images/newfig3.png", fig3)
+save("images/figure3.png", fig3)
 save("images/figure_S2_posterior_effects.png", figsup_posteriors)
 
+focus_row = posteriors_df[findfirst(posteriors_df.spacetime.=="spacetime" .&& posteriors_df.y .== "def_summer_year1"),:]
+chr_post = to_95_interval(focus_row.chr_mean, focus_row.var"chr_quant0.025", focus_row.var"chr_quant0.975")
+slagteri_post = to_95_interval(focus_row.slagteriid_mean, focus_row.var"slagteriid_quant0.025", focus_row.var"slagteriid_quant0.975")
+    
+open("in_text_numbers.txt", "a") do io
+    println(io, "CHR posterior variance: $chr_post")
+    println(io, "Slagteri posterior variance: $slagteri_post")
+end
 
 ###### Two-variable models ##########
 # Figure 4
@@ -584,6 +591,56 @@ save("images/prev_over_time_simple.png", fig; pt_per_unit=10)
 
 ######### Supplementary Figures ##############
 
+### Supplementary figure - distribution of all/infected animals according to birth month, slaughter month, age
+
+#### By age
+birth_month_df = CSV.read("data/sup_birth_month.csv", DataFrame)
+slaughter_month_df = CSV.read("data/sup_slaughter_month.csv", DataFrame)
+slaughter_age_df = CSV.read("data/sup_slaughter_age.csv", DataFrame)
+slaughter_age_df.age_yr = slaughter_age_df.slaughter_age ./ 365
+
+birth_slaughter_month = let bins = 1:13,
+    normalization = :probability,
+    colors = Dict(false => ("#2a78d6", 0.75), true => ("#eb6834", 0.75)),
+    labels = Dict(false => "All cattle", true => "Cattle with liver flukes")
+
+    fig = Figure(size = (800,800))
+    for (r, title, df, column) in zip((1,2), ("Birth month", "Slaughter month"),
+        (birth_month_df, slaughter_month_df), (:birth_month, :slaughter_month))
+    ax = Axis(fig[r,1];
+        title, xticks = (0.5 .+ (1:12), Dates.format.(Dates.Date.(2000, 1:12), "u")),
+        limits = (1, 13, 0, 0.17), xgridvisible = false
+    )
+    grps = groupby(df, :flukes)
+    for K in keys(grps) 
+        flukes = K.flukes
+        grp = grps[K]
+        hist!(ax, grp[:, column]; bins, normalization, weights = grp.n,
+            label = labels[flukes], color = colors[flukes], strokewidth = 1, strokecolor = :white)
+    end
+    end
+    ax = Axis(
+    fig[3,1];
+    title = "Age at slaughter",
+    limits = (0, 10, 0, nothing),
+    xticks = 0:10,
+    xlabel = "Years",
+    xgridvisible = false
+    )
+    grps = groupby(slaughter_age_df, :flukes)
+    for K in keys(grps) 
+    flukes = K.flukes
+    grp = grps[K]
+    hist!(ax, grp.age_yr; bins = 0:0.5:10, normalization, weights = grp.n,
+        label = labels[flukes], color = colors[flukes], strokewidth = 1, strokecolor = :white)
+    end
+
+    Legend(fig[4,1], first(fig.content), tellwidth = false, tellheight = true, orientation = :horizontal)
+    fig
+end
+
+save("images/birth_slaughter_month.png", birth_slaughter_month, px_per_unit = 3)
+
 ### Supplementary figure - correlation heatmap
 preds = CSV.read("/home/tvd/K/FasciolaDK/predictors.csv", DataFrame)
 preds = preds[!, occursin.("year", names(preds))]
@@ -617,6 +674,3 @@ fig
 save(joinpath("images", "correlation_coefficients.png"), fig)
 
 
-focus_row = posteriors_df[findfirst(posteriors_df.spacetime.=="spacetime" .&& posteriors_df.y .== "ollerenshaw_year2"),:]
-focus_row.chr_mean, focus_row.var"chr_quant0.025", focus_row.var"chr_quant0.975"   
-focus_row.slagteriid_mean, focus_row.var"slagteriid_quant0.025", focus_row.var"slagteriid_quant0.975"   

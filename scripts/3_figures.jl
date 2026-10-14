@@ -3,11 +3,12 @@ using Rasters, DataFrames, CSV, Statistics, LinearAlgebra
 using CairoMakie, AlgebraOfGraphics
 import GeometryOps as GO, GeoInterface as GI, GADM, GeometryBasics
 import Rasters: dims
-import Dates: today
+import Dates: today, Day
+import Random: shuffle!
 import FasciolaDK: to_pct_label, Label_subplot, plot_denmark!, 
-    vsup_colormatrix, vsup_legend, varname_to_label
+    vsup_colormatrix, vsup_legend, varname_to_label, roundstring
 
-global output_date = today()
+global output_date = today() - Day(1)
 
 ### Some basic functions and data used in multiple figures
 dk_munic = GADM.get("DNK"; depth=2) |> DataFrame
@@ -265,12 +266,14 @@ effect_matrix975 = fill(NaN, n_heat, n_heat)
 map(eachrow(two_var_df)) do row
     i = findfirst(==(row.envvar1), heat_vars)
     j = findfirst(==(row.envvar2), heat_vars)
-    effect_matrix[j,i] = row.envvar1_mean
-    effect_matrix025[j,i] = row.var"envvar1_quant0.025"
-    effect_matrix975[j,i] = row.var"envvar1_quant0.975"
-    effect_matrix[i,j] = row.envvar2_mean
-    effect_matrix025[i,j] = row.var"envvar2_quant0.025"
-    effect_matrix975[i,j] = row.var"envvar2_quant0.975"
+    if !isnothing(i) && !isnothing(j)
+        effect_matrix[j,i] = row.envvar1_mean
+        effect_matrix025[j,i] = row.var"envvar1_quant0.025"
+        effect_matrix975[j,i] = row.var"envvar1_quant0.975"
+        effect_matrix[i,j] = row.envvar2_mean
+        effect_matrix025[i,j] = row.var"envvar2_quant0.025"
+        effect_matrix975[i,j] = row.var"envvar2_quant0.975"
+    end
 end
 effect_matrix[diagind(effect_matrix)] .=  backbone3_single.envvar_mean[indexin(heat_vars, backbone3_single.y)]
 effect_matrix025[diagind(effect_matrix)] .=  backbone3_single.var"envvar_quant0.025"[indexin(heat_vars, backbone3_single.y)]
@@ -282,31 +285,52 @@ plot_data = effect_matrix[1:end,end:-1:1]
 effect_lim = maximum(abs, filter(!isnan, plot_data))
 xsize, ysize = size(plot_data)
 
-fig, ax, pl = heatmap(plot_data;
-    axis = (
-        xticks = (1:xsize, heat_labels[1:xsize]), yticks = (ysize:-1:1, heat_labels[1:ysize]),
-        xticklabelrotation = pi / 4, xticklabelalign = (:right, :top),
-        ylabel = "Effect of ↓", xlabel = "controlling for →",
-        xlabelfont = :bold, ylabelfont = :bold,
-        #title = "Two-variable models: effect of each variable controlling for another",
-        titlesize = 18,
-    ),
-    figure = (; size = (900, 800)),
-    colormap = Reverse(:RdBu), colorrange = (-effect_lim, effect_lim),
-    nan_color = :lightgray,
+# posterior probability of the effect being on the same side of zero as its mean;
+# no draws exist for diagonal (single-variable) cells, so those stay NaN
+twovar_draws = CSV.read("posterior_draws_twovars_$output_date.csv", DataFrame)
+sig_matrix = fill(NaN, n_heat, n_heat)
+for g in groupby(twovar_draws, [:envvar1, :envvar2])
+    i = findfirst(==(g.envvar1[1]), heat_vars)
+    j = findfirst(==(g.envvar2[1]), heat_vars)
+    if !isnothing(i) && !isnothing(j)
+        sig_matrix[j, i] = max(mean(g.value1 .> 0), mean(g.value1 .< 0))
+        sig_matrix[i, j] = max(mean(g.value2 .> 0), mean(g.value2 .< 0))
+    end
+end
+sig_matrix[diagind(sig_matrix)] .= max.(
+    mean(posterior_da[model = 3, y = At(heat_vars)] .> 0; dims = :draw),
+    mean(posterior_da[model = 3, y = At(heat_vars)] .< 0; dims = :draw)
 )
 
-diag_boxes = [Rect2f(k - 0.5, (xsize + 1 - k) - 0.5, 1, 1) for k in 1:xsize]
-poly!(ax, diag_boxes; color = :transparent, strokecolor = :black, strokewidth = 1)
+plot_sig = sig_matrix[1:end, end:-1:1]
+stars(p) = isnan(p) ? "" : p > 0.99 ? "**" : p > 0.90 ? "*" : ""
 
-labels = cor_to_string.(plot_data)
-text!(ax, 
-    vec(Tuple.(CartesianIndices(plot_data))); text = vec(labels),
-    align = (:center, :center))
-Colorbar(fig[1, 2], pl, label = "Posterior mean effect (log-odds)")
-fig
+fig4 = let
+    fig, ax, pl = heatmap(plot_data;
+        axis = (
+            xticks = (1:xsize, heat_labels[1:xsize]), yticks = (ysize:-1:1, heat_labels[1:ysize]),
+            xticklabelrotation = pi / 4, xticklabelalign = (:right, :top),
+            ylabel = "Effect of ↓", xlabel = "controlling for →",
+            xlabelfont = :bold, ylabelfont = :bold,
+            #title = "Two-variable models: effect of each variable controlling for another",
+            titlesize = 18,
+        ),
+        figure = (; size = (900, 800)),
+        colormap = Reverse(:RdBu), colorrange = (-effect_lim, effect_lim),
+        nan_color = :lightgray,
+    )
 
-save(joinpath("images", "figure4_twovar_effect_heatmap.png"), fig)
+    diag_boxes = [Rect2f(k - 0.5, (xsize + 1 - k) - 0.5, 1, 1) for k in 1:xsize]
+    poly!(ax, diag_boxes; color = :transparent, strokecolor = :black, strokewidth = 1)
+
+    labels = roundstring.(plot_data) .* stars.(plot_sig)
+    text!(ax, 
+        vec(Tuple.(CartesianIndices(plot_data))); text = vec(labels),
+        align = (:center, :center))
+    Colorbar(fig[1, 2], pl, label = "Posterior mean effect (log-odds)")
+    fig
+end
+save(joinpath("images", "figure4_twovar_effect_heatmap.png"), fig4)
 
 
 ############ Posterior estimate of prevalence in space and time ############
@@ -357,7 +381,7 @@ posterior_estimate_975 = rebuild(
     posterior_estimate_mean; 
     data=parent(maybe_quantile.(eachslice(posterior_estimate; dims=otherdims(posterior_estimate, :draw)), 0.975)))
 
-fig3, figs1, figs2 = map((posterior_estimate_mean, posterior_estimate_025, posterior_estimate_975)) do r
+fig5, figs1, figs2 = map((posterior_estimate_mean, posterior_estimate_025, posterior_estimate_975)) do r
     let fig = Figure(size=(800, 900)),
         nrows = 4,
         colorrange = (0, 0.35),
@@ -397,7 +421,7 @@ fig3, figs1, figs2 = map((posterior_estimate_mean, posterior_estimate_025, poste
     end
 end
 
-save("images/figure3.eps", fig3)
+save("images/figure5.png", fig5)
 save("images/figures1_prevalence_lower.png", figs1; pt_per_unit=10)
 save("images/figures2_prevalence_upper.png", figs2; pt_per_unit=10)
 
@@ -454,8 +478,6 @@ import StatsBase
 
 to_95_interval(m, l, u) = @sprintf "%.2f (%.2f - %.2f)" m l u
 to_95_interval(::Missing, l, u) = ""
-add_rank(x::AbstractVector; rev) =
-    [@sprintf "%.1f (%d)" xi r for (xi, r) in zip(x, StatsBase.ordinalrank(x; rev))]
 to_diff_se(d, se) = @sprintf "%.1f (%.1f)" d se
 to_diff_se(::Missing, se) = ""
 
@@ -465,11 +487,16 @@ backbone_groups = groupby(posteriors_df, [:øko, :chr, :slagtid, :time, :spaceti
 backbone_keys = [NamedTuple(k) for k in keys(backbone_groups)]
 group_order = [findfirst(==(m), backbone_keys) for m in focus_models]
 
-bordered_cells(v, mask) = [Cell(x; border_bottom=b) for (x, b) in zip(v, mask)]
+# SummaryTables escapes backslashes in plain strings; this wrapper opts a value
+# out of escaping so literal LaTeX commands (e.g. \hspace) render as-is
+struct RawLatex
+    s::String
+end
+Base.show(io::IO, ::MIME"text/latex", r::RawLatex) = print(io, r.s)
 
 backbone_tables = map(zip(group_order, backbone_labels)) do (gi, label)
-    df = sort(backbone_groups[gi], :mlik, rev=true)
-    df.envlabel = varname_to_label.(df.y, sep = " - ")
+    df = sort(backbone_groups[gi], :waic_diff)
+    df.envlabel = varname_to_label.(df.y, sep = raw"--\hspace{3mm} ")
 
     fixed_vars = df.time[1] ? ("øko", "year", "envvar") : ("øko", "envvar")
     df = transform(
@@ -485,25 +512,25 @@ backbone_tables = map(zip(group_order, backbone_labels)) do (gi, label)
 
     df.waic_diff_formatted = to_diff_se.(df.waic_diff, df.waic_diff_se)
     df.dic_diff_formatted = to_diff_se.(df.dic_diff, df.dic_diff_se)
-
+    df.mlik_formatted = roundstring.(df.mlik; digits = 1)
     # move the baseline row to the bottom, set off by a rule
     df = vcat(filter(:y => !=("1"), df), filter(:y => ==("1"), df))
     mask = falses(nrow(df))
     mask[end-1] = true
 
-    col_labels = ["Environmental variable", "ΔWAIC (SE)", "ΔDIC (SE)", "Environmental effect (95% CI)", "Organic (95% CI)"]
-    col_labels2 = ["Backbone model", "WAIC (SE)", "DIC (SE)", " - ", "Organic (95% CI)"]
-    columns =  [:envlabel, :waic_diff_formatted, :dic_diff_formatted, :envvar_formatted, :øko_formatted]
+    col_labels = ["Weather variable", "Effect (95% CI)", "ΔWAIC (SE)", "ΔDIC (SE)", "M.lik.", "Organic (95% CI)"]
+    col_labels2 = ["Backbone model", "Backbone model", "WAIC (SE)", "DIC (SE)", "M.lik.", "Organic (95% CI)"]
+    columns =  [:envvar_formatted, :waic_diff_formatted, :dic_diff_formatted, :mlik_formatted, :øko_formatted]
     if df.time[1]
         push!(col_labels, "Year (95% CI)")
         push!(col_labels2, "Year (95% CI)")
         push!(columns, :year_formatted)
     end
-    cols = [bordered_cells(df[!, x], mask) for x in columns]
-    valuecells = hcat(cols...)
+    varnamecells = broadcast(x -> Cell(Multiline(RawLatex.(x)...); halign=:left), split.(df.envlabel, "--"))
+    valuecells = hcat(varnamecells, Cell.(Tables.matrix(df[!, columns]), halign = :left, valign = :center))
 
-    header = Cell.(col_labels; bold=true, border_bottom=true)
-    header2 = Cell.(col_labels2; bold=true, border_bottom=true)
+    header = Cell.(col_labels; bold=true, border_bottom=true, halign = :left)
+    header2 = Cell.(col_labels2; bold=true, border_bottom=true, merge=true, halign = :left)
     Table(vcat(header', valuecells[1:end-1,:], header2', valuecells[end:end,:]))
 end
 
@@ -516,13 +543,33 @@ end
 
 # the "main model"
 post_slagteri = CSV.read("slagteri_posterior.csv", DataFrame)
+slagteri_categories = parse.(Int, readlines("slagteri_categories.txt"))
+categories = ["1,000-5,000", "5,000-20,000", "20,000-100,000", "100,000-500,000", ">500,000"]
 post_slagteri.formatted = to_95_interval.(post_slagteri.mean, post_slagteri.var"0.025quant", post_slagteri.var"0.975quant")
 post_slagteri.label = string.(post_slagteri.ID)
-headercells = Cell.(["Abattoir ID", "Log odds ratio (95% CI)"]; bold=true, border_bottom=true)
-datacells = hcat(Cell.(post_slagteri.label), Cell.(post_slagteri.formatted))
-table2 = Table(vcat(headercells', datacells))
+post_slagteri.category = categories[slagteri_categories]
+post_slagteri = DataFrames.combine(groupby(post_slagteri, :category), shuffle!) # shuffle within categories 
+# Split table along two halves - need some manually latex
 open(joinpath("images", "posterior_abattoir_random_effects.tex"), "w") do io
-    show(io, MIME"text/latex"(), table2)
+    n = nrow(post_slagteri)
+    nfirst = cld(n, 2)
+    halves = (post_slagteri[1:nfirst, :], post_slagteri[nfirst+1:end, :])
+    println(io, "\\small")
+    for (i, half) in enumerate(halves)
+        println(io, "\\begin{minipage}{0.48\\textwidth}")
+        println(io, "\\centering")
+        println(io, "\\begin{tabular}{cc}")
+        println(io, "\\toprule")
+        println(io, "\\textbf{Approximate size} & \\textbf{Log odds ratio (95\\% CI)} \\\\")
+        println(io, "\\midrule")
+        for row in eachrow(half)
+            println(io, " $(row.category) & $(row.formatted)\\\\")
+        end
+        println(io, "\\bottomrule")
+        println(io, "\\end{tabular}")
+        println(io, "\\end{minipage}")
+        i == 1 && println(io, "\\hfill")
+    end
 end
 
 
@@ -560,7 +607,7 @@ fig, ax, pl = heatmap(cormat_to_plot;
 )
 
 text!(ax, 
-    vec(Tuple.(CartesianIndices(cormat_to_plot))); text = vec(cor_to_string.(cormat_to_plot)),
+    vec(Tuple.(CartesianIndices(cormat_to_plot))); text = vec(roundstring.(cormat_to_plot)),
     align = (:center, :center))
 hidespines!(ax, :r); hidespines!(ax, :t)
 Colorbar(fig[1,1], pl, tellheight = false, tellwidth = false,
@@ -568,3 +615,8 @@ Colorbar(fig[1,1], pl, tellheight = false, tellwidth = false,
     flipaxis = false, label = "Correlation coefficient", labelsize = 18)
 fig
 save(joinpath("images", "correlation_coefficients.png"), fig)
+
+
+focus_row = posteriors_df[findfirst(posteriors_df.spacetime.=="spacetime" .&& posteriors_df.y .== "ollerenshaw_year2"),:]
+focus_row.chr_mean, focus_row.var"chr_quant0.025", focus_row.var"chr_quant0.975"   
+focus_row.slagteriid_mean, focus_row.var"slagteriid_quant0.025", focus_row.var"slagteriid_quant0.975"   

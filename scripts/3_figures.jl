@@ -142,7 +142,7 @@ fig2 = let years = 2010:2023
                :yr => "Year",
                [:flukes, :liver] .=> "Prevalence",
                color=AlgebraOfGraphics.dims(1) =>
-                   renamer(["Liver fluke", "Other liver disease"]),
+                   renamer(["Liver fluke", "Other liver findings"]),
                col=:scope
            ) *
            visual(Lines)

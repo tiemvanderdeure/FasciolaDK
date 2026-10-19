@@ -240,19 +240,13 @@ all_animals.birth_month = month.(all_animals.FOEDSELSDATO)
 all_animals.slaughter_month = month.(all_animals.SLAGTDATO)
 all_animals.slaughter_age = getfield.(all_animals.SLAGTDATO .- all_animals.FOEDSELSDATO, :value)
 
-all_animals_yearly, selected_animals_yearly = map((all_animals, animals_filtered2)) do d
-    combine(groupby(d, :yr)) do g
-        n = nrow(g)
-        (   
-            n = n,
-            liver = count(g.liverdisease) / n,
-            flukes = count(g.flukes) / n
-        )
-    end
-end
+all_animals_yearly = combine(groupby(all_animals, :yr), nrow => :n, :liverdisease => mean => :liver, :flukes => mean => :flukes)
+selected_animals_yearly = combine(groupby(predictorsdf, :yr), :count => sum => :n, :positive_other => sum => :nliver, :positive => sum => :nflukes)
+selected_animals_yearly.liver = selected_animals_yearly.nliver ./ selected_animals_yearly.n
+selected_animals_yearly.flukes = selected_animals_yearly.nflukes ./ selected_animals_yearly.n
 all_animals_yearly.scope .= "All cattle"
 selected_animals_yearly.scope .= "Selected cattle"
-annual_stats = vcat(all_animals_yearly, selected_animals_yearly)
+annual_stats = vcat(all_animals_yearly, selected_animals_yearly, cols = :intersect)
 CSV.write(joinpath("data", "fig_1_annual_stats.csv"), annual_stats)
 
 for col in [:birth_month, :slaughter_month, :slaughter_age]
@@ -288,16 +282,16 @@ chrgeom.geometry = tuple.(chrgeom.LON, chrgeom.LAT)
 # find municipality for each cohort
 find_first_munic(co; dk_munic = dk_munic) = findfirst(g -> GO.within(co, g), dk_munic.geometry)
 chrgeom.group = find_first_munic.(chrgeom.geometry; dk_munic = dk_grps)
-animals_koords = innerjoin(animals_filtered2, chrgeom, on = :CHR_ID)
+animals_koords = innerjoin(predictorsdf, chrgeom, on = :CHR_ID)
 # calculate stats for each municipality
 municipality_stats = combine(groupby(animals_koords, :group)) do g
-    n = nrow(g)
+    n = sum(g.count)
     nbes = nrow(unique(g[!, [:LAT, :LON]]))
     (   
         n = n,
         nbes = nbes,
-        liver = count(g.liverdisease) / n,
-        flukes = count(g.flukes) / n
+        liver = sum(g.positive_other) / n,
+        flukes = sum(g.positive) / n
     )
 end
 municipality_stats = rightjoin(municipality_stats, dk_grps[:, [:group, :geometry]], on = :group)

@@ -149,3 +149,8 @@ function varname_to_label(x; sep = "\n")
     label = isnothing(season) ? label : "$label $season"
     return label
 end
+
+to_95_interval(m, l, u) = Printf.@sprintf "%.2f (%.2f - %.2f)" m l u
+to_95_interval(::Missing, l, u) = ""
+to_diff_se(d, se) = Printf.@sprintf "%.1f (%.1f)" d se
+to_diff_se(::Missing, se) = ""

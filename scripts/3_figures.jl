@@ -5,7 +5,8 @@ import GeometryOps as GO, GeoInterface as GI, GADM, GeometryBasics, Dates
 import Rasters: dims
 import Random: shuffle!
 import FasciolaDK: to_pct_label, Label_subplot, plot_denmark!, 
-    vsup_colormatrix, vsup_legend, varname_to_label, roundstring
+    vsup_colormatrix, vsup_legend, varname_to_label, roundstring,
+    to_95_interval, to_diff_se
 
 global output_date = Dates.today()
 
@@ -242,7 +243,7 @@ fig3, figsup_posteriors = map([envs_sorted[1:10], envs_sorted[11:end]]) do envs
     return fig
 end
 
-save("images/figure3.png", fig3)
+save("images/figure3.eps", fig3)
 save("images/figure_S2_posterior_effects.png", figsup_posteriors)
 
 focus_row = posteriors_df[findfirst(posteriors_df.spacetime.=="spacetime" .&& posteriors_df.y .== "def_summer_year1"),:]
@@ -336,7 +337,7 @@ fig4 = let
     Colorbar(fig[1, 2], pl, label = "Posterior mean effect (log-odds)")
     fig
 end
-save(joinpath("images", "figure4_twovar_effect_heatmap.png"), fig4)
+save(joinpath("images", "figure4_twovar_effect_heatmap.eps"), fig4; pt_per_unit = 10)
 
 
 ############ Posterior estimate of prevalence in space and time ############
@@ -427,7 +428,7 @@ fig5, figs1, figs2 = map((posterior_estimate_mean, posterior_estimate_025, poste
     end
 end
 
-save("images/figure5.png", fig5)
+save("images/figure5.eps", fig5)
 save("images/figures1_prevalence_lower.png", figs1; pt_per_unit=10)
 save("images/figures2_prevalence_upper.png", figs2; pt_per_unit=10)
 
@@ -481,11 +482,6 @@ save("images/figureS4_random_effect.png", figs4; pt_per_unit=10)
 #### Tables with posteriors of INLA models, grouped by backbone
 using SummaryTables, DataFrames, Printf
 import StatsBase
-
-to_95_interval(m, l, u) = @sprintf "%.2f (%.2f - %.2f)" m l u
-to_95_interval(::Missing, l, u) = ""
-to_diff_se(d, se) = @sprintf "%.1f (%.1f)" d se
-to_diff_se(::Missing, se) = ""
 
 backbone_labels = ["Organic + abattoir", "... + spatial", "... + herd ID", "... + time", "... + spatiotemporal"]
 
